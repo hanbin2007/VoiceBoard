@@ -15,31 +15,60 @@ class KeyboardSimulator {
     
     static let shared = KeyboardSimulator()
     
-    private init() {}
+    /// Callback when accessibility permission changes
+    var onPermissionChange: ((Bool) -> Void)?
+    
+    private init() {
+        // 监听辅助功能权限变化
+        setupPermissionObserver()
+    }
+    
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+    
+    // MARK: - Permission Observer
+    
+    private func setupPermissionObserver() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // 延迟检查，因为权限变更需要一点时间生效
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let isGranted = self?.checkAccessibilityPermission(prompt: false) ?? false
+                self?.onPermissionChange?(isGranted)
+            }
+        }
+    }
     
     // MARK: - Permission Check
     
     /// Check if accessibility permissions are granted
-    func checkAccessibilityPermission() -> Bool {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+    /// - Parameter prompt: If true, shows system dialog prompting user to grant access
+    /// - Returns: Whether accessibility permission is granted
+    func checkAccessibilityPermission(prompt: Bool = false) -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: prompt] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
     
-    /// Request accessibility permission (shows system dialog)
+    /// Request accessibility permission - shows system dialog that guides user to System Settings
+    /// This will add the app to the accessibility list automatically
     func requestAccessibilityPermission() {
-        // First try the standard way
+        // 使用 prompt: true 来触发系统弹窗，这会自动将 App 添加到辅助功能列表中
         let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
         let isTrusted = AXIsProcessTrustedWithOptions(options)
         
-        // If not trusted, open System Settings directly
         if !isTrusted {
+            // 弹窗会自动显示，但如果用户之前拒绝过，直接打开设置
             openAccessibilitySettings()
         }
     }
     
-    /// Open System Settings to Accessibility > Privacy
+    /// Open System Settings to Accessibility > Privacy directly
     func openAccessibilitySettings() {
-        // macOS Ventura and later use different URL scheme
+        // macOS Ventura (13.0) and later use this URL scheme
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
