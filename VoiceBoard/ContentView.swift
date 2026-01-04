@@ -36,32 +36,57 @@ struct iOSContentView: View {
     @ObservedObject var multipeerManager: MultipeerManager
     @ObservedObject var speechRecognizer: SpeechRecognizer
     @Binding var showConnectionSheet: Bool
+    @FocusState private var isTextEditorFocused: Bool
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                // Connection Status Card (tappable)
-                connectionCard
-                    .onTapGesture {
-                        showConnectionSheet = true
+            GeometryReader { geometry in
+                ScrollViewReader { scrollProxy in
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            // Connection Status Card (tappable)
+                            connectionCard
+                                .onTapGesture {
+                                    showConnectionSheet = true
+                                }
+                            
+                            // Transcript Display (fixed height when keyboard is shown)
+                            transcriptView
+                                .frame(minHeight: isTextEditorFocused ? 120 : max(geometry.size.height * 0.35, 150))
+                            
+                            // Control Buttons Panel
+                            controlButtonsPanel
+                            
+                            // Record Button
+                            recordButton
+                                .id("recordButton")
+                        }
+                        .padding()
                     }
-                
-                Divider()
-                
-                // Transcript Display
-                transcriptView
-                
-                Spacer()
-                
-                // Record Button
-                recordButton
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: isTextEditorFocused) { _, focused in
+                        if focused {
+                            withAnimation {
+                                scrollProxy.scrollTo("recordButton", anchor: .bottom)
+                            }
+                        }
+                    }
+                }
             }
-            .padding()
             .navigationTitle("VoiceBoard")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showConnectionSheet = true }) {
                         Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                }
+                ToolbarItem(placement: .keyboard) {
+                    HStack {
+                        Spacer()
+                        Button("完成") {
+                            isTextEditorFocused = false
+                        }
                     }
                 }
             }
@@ -69,7 +94,7 @@ struct iOSContentView: View {
                 ConnectionManagementView(multipeerManager: multipeerManager)
             }
             .onChange(of: speechRecognizer.transcript) { _, newValue in
-                multipeerManager.sendText(newValue)
+                multipeerManager.sendCommand(.text(newValue))
             }
         }
     }
@@ -89,12 +114,6 @@ struct iOSContentView: View {
                     Text(multipeerManager.connectionState.rawValue)
                         .font(.subheadline)
                         .fontWeight(.medium)
-                    
-                    if !multipeerManager.availablePeers.isEmpty {
-                        Text("发现 \(multipeerManager.availablePeers.count) 台设备")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
             
@@ -111,53 +130,145 @@ struct iOSContentView: View {
     
     private var transcriptView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("识别结果")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            
-            ScrollView {
-                Text(speechRecognizer.transcript.isEmpty ? "点击下方按钮开始说话..." : speechRecognizer.transcript)
-                    .font(.title3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(speechRecognizer.transcript.isEmpty ? .secondary : .primary)
+            HStack {
+                Text("识别结果")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                
+                Text("(可编辑)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                
+                Spacer()
+                
+                if !speechRecognizer.transcript.isEmpty {
+                    Button(action: {
+                        speechRecognizer.transcript = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-            .frame(maxHeight: .infinity)
-            .padding()
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            
+            TextEditor(text: $speechRecognizer.transcript)
+                .font(.title3)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .focused($isTextEditorFocused)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    Group {
+                        if speechRecognizer.transcript.isEmpty {
+                            Text("点击下方按钮开始说话，或直接输入文字...")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                                .padding(16)
+                                .allowsHitTesting(false)
+                        }
+                    },
+                    alignment: .topLeading
+                )
+        }
+    }
+    
+    // MARK: - Control Buttons Panel
+    
+    private var controlButtonsPanel: some View {
+        VStack(spacing: 12) {
+            // Primary Actions Row
+            HStack(spacing: 12) {
+                // Insert Text Button
+                CommandButton(
+                    title: "插入",
+                    icon: "text.cursor",
+                    color: .blue,
+                    disabled: !multipeerManager.isConnected || speechRecognizer.transcript.isEmpty
+                ) {
+                    multipeerManager.sendCommand(.insert(speechRecognizer.transcript))
+                }
+                
+                // Insert + Enter Button
+                CommandButton(
+                    title: "发送",
+                    icon: "paperplane.fill",
+                    color: .green,
+                    disabled: !multipeerManager.isConnected || speechRecognizer.transcript.isEmpty
+                ) {
+                    multipeerManager.sendCommand(.insertAndEnter(speechRecognizer.transcript))
+                    speechRecognizer.transcript = ""
+                }
+            }
+            
+            // Secondary Actions Row
+            HStack(spacing: 12) {
+                // Clear Input Field
+                CommandButton(
+                    title: "清空",
+                    icon: "trash",
+                    color: .orange,
+                    disabled: !multipeerManager.isConnected
+                ) {
+                    multipeerManager.sendCommand(.clear)
+                }
+                
+                // Enter Key
+                CommandButton(
+                    title: "回车",
+                    icon: "return",
+                    color: .purple,
+                    disabled: !multipeerManager.isConnected
+                ) {
+                    multipeerManager.sendCommand(.enter)
+                }
+                
+                // Paste
+                CommandButton(
+                    title: "粘贴",
+                    icon: "doc.on.clipboard",
+                    color: .teal,
+                    disabled: !multipeerManager.isConnected
+                ) {
+                    multipeerManager.sendCommand(.paste)
+                }
+                
+                // Delete
+                CommandButton(
+                    title: "删除",
+                    icon: "delete.left",
+                    color: .red,
+                    disabled: !multipeerManager.isConnected
+                ) {
+                    multipeerManager.sendCommand(.delete)
+                }
+            }
         }
     }
     
     private var recordButton: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             Button(action: {
                 speechRecognizer.toggleRecording()
             }) {
                 ZStack {
                     Circle()
                         .fill(speechRecognizer.isRecording ? Color.red : Color.blue)
-                        .frame(width: 80, height: 80)
+                        .frame(width: 70, height: 70)
                         .shadow(radius: 4)
                     
                     Image(systemName: speechRecognizer.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 32))
+                        .font(.system(size: 28))
                         .foregroundStyle(.white)
                 }
             }
-            .disabled(!speechRecognizer.isAuthorized || !multipeerManager.isConnected)
-            .opacity(multipeerManager.isConnected ? 1.0 : 0.5)
+            .disabled(!speechRecognizer.isAuthorized)
             .scaleEffect(speechRecognizer.isRecording ? 1.1 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: speechRecognizer.isRecording)
             
-            if !multipeerManager.isConnected {
-                Text("请先连接Mac")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else {
-                Text(speechRecognizer.isRecording ? "点击停止" : "点击开始录音")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(speechRecognizer.isRecording ? "录音中..." : "点击录音")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             
             if let error = speechRecognizer.errorMessage {
                 Text(error)
@@ -165,7 +276,34 @@ struct iOSContentView: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(.bottom, 32)
+        .padding(.bottom, 16)
+    }
+}
+
+// MARK: - Command Button Component
+
+struct CommandButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let disabled: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                Text(title)
+                    .font(.caption2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(disabled ? Color(.systemGray5) : color.opacity(0.15))
+            .foregroundStyle(disabled ? .secondary : color)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .disabled(disabled)
     }
 }
 
@@ -179,7 +317,6 @@ struct ConnectionManagementView: View {
     var body: some View {
         NavigationStack {
             List {
-                // My Device Section
                 Section("我的设备") {
                     HStack {
                         Image(systemName: "iphone")
@@ -192,7 +329,6 @@ struct ConnectionManagementView: View {
                     }
                 }
                 
-                // Available Devices Section
                 Section("可用设备") {
                     if multipeerManager.availablePeers.isEmpty {
                         HStack {
@@ -230,7 +366,6 @@ struct ConnectionManagementView: View {
                     }
                 }
                 
-                // Actions Section
                 Section {
                     Button(action: {
                         multipeerManager.restart()
@@ -243,17 +378,6 @@ struct ConnectionManagementView: View {
                     }) {
                         Label("查看日志", systemImage: "doc.text")
                     }
-                }
-                
-                // Tips Section
-                Section("提示") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("• 确保iPhone和Mac在同一WiFi网络")
-                        Text("• Mac上也需要运行VoiceBoard应用")
-                        Text("• 如果搜不到设备，尝试重新搜索")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("连接管理")
@@ -281,17 +405,12 @@ struct LogsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if multipeerManager.logMessages.isEmpty {
-                    Text("暂无日志")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(multipeerManager.logMessages, id: \.self) { log in
-                        Text(log)
-                            .font(.system(.caption, design: .monospaced))
-                    }
+                ForEach(multipeerManager.logMessages, id: \.self) { log in
+                    Text(log)
+                        .font(.system(.caption, design: .monospaced))
                 }
             }
-            .navigationTitle("连接日志")
+            .navigationTitle("日志")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -315,6 +434,7 @@ struct LogsView: View {
 #if os(macOS)
 struct macOSContentView: View {
     @ObservedObject var multipeerManager: MultipeerManager
+    @EnvironmentObject var appState: AppState
     @State private var showLogs = false
     
     var body: some View {
@@ -331,9 +451,19 @@ struct macOSContentView: View {
     
     private var connectionPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header
-            Text("连接管理")
-                .font(.headline)
+            HStack {
+                Text("连接管理")
+                    .font(.headline)
+                Spacer()
+                Button(action: {
+                    appState.hideWindow()
+                }) {
+                    Image(systemName: "minus.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("隐藏到菜单栏")
+            }
             
             // My Device
             GroupBox("我的设备") {
@@ -347,8 +477,27 @@ struct macOSContentView: View {
                 .padding(.vertical, 4)
             }
             
+            // Accessibility Status
+            GroupBox("辅助功能") {
+                HStack {
+                    Circle()
+                        .fill(multipeerManager.hasAccessibilityPermission ? Color.green : Color.red)
+                        .frame(width: 10, height: 10)
+                    Text(multipeerManager.hasAccessibilityPermission ? "已授权" : "未授权")
+                    Spacer()
+                    if !multipeerManager.hasAccessibilityPermission {
+                        Button("授权") {
+                            multipeerManager.requestAccessibilityPermission()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            
             // Connection Status
-            GroupBox("状态") {
+            GroupBox("连接状态") {
                 HStack {
                     Circle()
                         .fill(multipeerManager.isConnected ? Color.green : Color.orange)
@@ -396,7 +545,6 @@ struct macOSContentView: View {
                 }
             }
             
-            // Actions
             HStack {
                 Button(action: {
                     multipeerManager.restart()
@@ -424,30 +572,17 @@ struct macOSContentView: View {
                             }
                         }
                     }
-                    .frame(height: 150)
+                    .frame(height: 120)
                 }
             }
             
             Spacer()
-            
-            // Tips
-            VStack(alignment: .leading, spacing: 4) {
-                Text("提示:")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                Text("• iPhone和Mac需在同一WiFi")
-                Text("• iPhone运行VoiceBoard并连接")
-                Text("• 连接后说话，文字将同步到此处")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
         .padding()
     }
     
     private var receivedTextPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header
             HStack {
                 Text("VoiceBoard")
                     .font(.largeTitle)
@@ -473,7 +608,6 @@ struct macOSContentView: View {
             
             Divider()
             
-            // Received Text
             VStack(alignment: .leading, spacing: 8) {
                 Text("接收的文字")
                     .font(.headline)
@@ -490,6 +624,20 @@ struct macOSContentView: View {
                 .padding()
                 .background(Color(.textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            
+            // Status hint
+            if !multipeerManager.hasAccessibilityPermission {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("请在左侧面板授权辅助功能以启用键盘模拟")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
         .padding()

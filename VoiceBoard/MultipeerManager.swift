@@ -45,6 +45,11 @@ class MultipeerManager: NSObject, ObservableObject {
     /// My device name
     @Published var myDeviceName: String = ""
     
+    #if os(macOS)
+    /// Accessibility permission status
+    @Published var hasAccessibilityPermission: Bool = false
+    #endif
+    
     // MARK: - Private Properties
     
     // Service type must be 1-15 characters, lowercase, letters/numbers/hyphens only
@@ -76,6 +81,10 @@ class MultipeerManager: NSObject, ObservableObject {
         myDeviceName = myPeerID.displayName
         log("初始化设备: \(myDeviceName)")
         log("角色: \(deviceRole)")
+        
+        #if os(macOS)
+        checkAccessibilityPermission()
+        #endif
         
         setupSession()
         startServices()
@@ -144,17 +153,20 @@ class MultipeerManager: NSObject, ObservableObject {
         startServices()
     }
     
-    /// Send text to connected peer
+    /// Send text to connected peer (legacy, for preview)
     func sendText(_ text: String) {
-        guard !session.connectedPeers.isEmpty else {
-            return
-        }
+        sendCommand(.text(text))
+    }
+    
+    /// Send a command to connected peer
+    func sendCommand(_ command: VoiceBoardCommand) {
+        guard !session.connectedPeers.isEmpty else { return }
         
-        if let data = text.data(using: .utf8) {
+        if let data = command.encode() {
             do {
                 try session.send(data, toPeers: session.connectedPeers, with: .reliable)
             } catch {
-                log("发送失败: \(error.localizedDescription)")
+                log("发送命令失败: \(error.localizedDescription)")
             }
         }
     }
@@ -170,6 +182,97 @@ class MultipeerManager: NSObject, ObservableObject {
     func clearLogs() {
         logMessages.removeAll()
     }
+    
+    // MARK: - macOS Accessibility
+    
+    #if os(macOS)
+    func checkAccessibilityPermission() {
+        hasAccessibilityPermission = KeyboardSimulator.shared.checkAccessibilityPermission()
+        log("辅助功能权限: \(hasAccessibilityPermission ? "已授权" : "未授权")")
+    }
+    
+    func requestAccessibilityPermission() {
+        KeyboardSimulator.shared.requestAccessibilityPermission()
+        // Check again after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.checkAccessibilityPermission()
+        }
+    }
+    
+    private func handleCommand(_ command: VoiceBoardCommand) {
+        log("收到命令: \(command)")
+        
+        switch command {
+        case .text(let text):
+            receivedText = text
+            
+        case .insert(let text):
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.typeText(text)
+                }
+            } else {
+                log("⚠️ 未授权辅助功能")
+            }
+            
+        case .insertAndEnter(let text):
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.insertTextAndEnter(text)
+                }
+            }
+            
+        case .enter:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.pressEnter()
+                }
+            }
+            
+        case .clear:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.clearInputField()
+                }
+            }
+            
+        case .paste:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.paste()
+                }
+            }
+            
+        case .delete:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.pressDelete()
+                }
+            }
+            
+        case .selectAll:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.selectAll()
+                }
+            }
+            
+        case .copy:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.copy()
+                }
+            }
+            
+        case .cut:
+            if hasAccessibilityPermission {
+                DispatchQueue.global(qos: .userInteractive).async {
+                    KeyboardSimulator.shared.cut()
+                }
+            }
+        }
+    }
+    #endif
 }
 
 // MARK: - MCSessionDelegate
@@ -199,8 +302,14 @@ extension MultipeerManager: MCSessionDelegate {
     }
     
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        if let text = String(data: data, encoding: .utf8) {
-            Task { @MainActor in
+        Task { @MainActor in
+            // Try to decode as command first
+            if let command = VoiceBoardCommand.decode(from: data) {
+                #if os(macOS)
+                self.handleCommand(command)
+                #endif
+            } else if let text = String(data: data, encoding: .utf8) {
+                // Fallback to plain text
                 self.receivedText = text
                 self.log("收到文字: \(text.prefix(50))...")
             }
