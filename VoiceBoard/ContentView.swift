@@ -56,21 +56,11 @@ struct iOSContentView: View {
                             
                             // Control Buttons Panel
                             controlButtonsPanel
-                            
-                            // Record Button
-                            recordButton
-                                .id("recordButton")
                         }
                         .padding()
                     }
                     .scrollDismissesKeyboard(.interactively)
-                    .onChange(of: isTextEditorFocused) { _, focused in
-                        if focused {
-                            withAnimation {
-                                scrollProxy.scrollTo("recordButton", anchor: .bottom)
-                            }
-                        }
-                    }
+
                 }
             }
             .navigationTitle("VoiceBoard")
@@ -161,7 +151,7 @@ struct iOSContentView: View {
                 .overlay(
                     Group {
                         if speechRecognizer.transcript.isEmpty {
-                            Text("点击下方按钮开始说话，或直接输入文字...")
+                            Text("输入文字或使用系统键盘语音输入...")
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
                                 .padding(16)
@@ -245,39 +235,7 @@ struct iOSContentView: View {
             }
         }
     }
-    
-    private var recordButton: some View {
-        VStack(spacing: 8) {
-            Button(action: {
-                speechRecognizer.toggleRecording()
-            }) {
-                ZStack {
-                    Circle()
-                        .fill(speechRecognizer.isRecording ? Color.red : Color.blue)
-                        .frame(width: 70, height: 70)
-                        .shadow(radius: 4)
-                    
-                    Image(systemName: speechRecognizer.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white)
-                }
-            }
-            .disabled(!speechRecognizer.isAuthorized)
-            .scaleEffect(speechRecognizer.isRecording ? 1.1 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: speechRecognizer.isRecording)
-            
-            Text(speechRecognizer.isRecording ? "录音中..." : "点击录音")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            
-            if let error = speechRecognizer.errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-        .padding(.bottom, 16)
-    }
+
 }
 
 // MARK: - Command Button Component
