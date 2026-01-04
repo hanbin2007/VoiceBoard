@@ -48,6 +48,12 @@ class MultipeerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// Accessibility permission status
     @Published var hasAccessibilityPermission: Bool = false
+    
+    /// Whether auto-reconnect is enabled
+    @Published var autoReconnectEnabled: Bool = true
+    
+    /// Whether currently attempting to auto-reconnect
+    @Published var isAutoReconnecting: Bool = false
     #endif
     
     // MARK: - Private Properties
@@ -63,6 +69,9 @@ class MultipeerManager: NSObject, ObservableObject {
     private let deviceRole = "ios"
     #else
     private let deviceRole = "mac"
+    private var reconnectTask: Task<Void, Never>?
+    private let reconnectDelay: TimeInterval = 3.0
+    private let lastConnectedPeerKey = "LastConnectedPeerName"
     #endif
     
     // MARK: - Initialization
@@ -183,6 +192,117 @@ class MultipeerManager: NSObject, ObservableObject {
         logMessages.removeAll()
     }
     
+    #if os(macOS)
+    // MARK: - Auto Reconnection (macOS only)
+    
+    /// The name of the last connected peer
+    var lastConnectedPeerName: String? {
+        get { UserDefaults.standard.string(forKey: lastConnectedPeerKey) }
+        set { UserDefaults.standard.set(newValue, forKey: lastConnectedPeerKey) }
+    }
+    
+    /// Save the peer info when successfully connected
+    private func saveLastConnectedPeer(_ peerID: MCPeerID) {
+        lastConnectedPeerName = peerID.displayName
+        log("💾 已保存最后连接的设备: \(peerID.displayName)")
+    }
+    
+    /// Cancel any ongoing auto-reconnect attempts
+    func cancelAutoReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        isAutoReconnecting = false
+        log("🛑 已取消自动重连")
+    }
+    
+    /// Toggle auto-reconnect feature
+    func toggleAutoReconnect(_ enabled: Bool) {
+        autoReconnectEnabled = enabled
+        if !enabled {
+            cancelAutoReconnect()
+        }
+        log("自动重连: \(enabled ? "已启用" : "已禁用")")
+    }
+    
+    /// Start auto-reconnect process
+    private func startAutoReconnect(disconnectedPeerName: String) {
+        guard autoReconnectEnabled else {
+            log("自动重连已禁用，跳过")
+            return
+        }
+        
+        guard !isConnected else {
+            log("已连接，跳过自动重连")
+            return
+        }
+        
+        // Cancel any existing reconnect task
+        reconnectTask?.cancel()
+        isAutoReconnecting = true
+        
+        log("🔄 开始自动重连: \(disconnectedPeerName)")
+        
+        reconnectTask = Task { [weak self] in
+            guard let self = self else { return }
+            var attemptCount = 0
+            
+            while !Task.isCancelled {
+                attemptCount += 1
+                
+                await MainActor.run {
+                    self.log("尝试重连 (第\(attemptCount)次)...")
+                }
+                
+                // Check if the peer is in available peers list
+                let foundPeer = await MainActor.run { () -> MCPeerID? in
+                    return self.availablePeers.first { $0.displayName == disconnectedPeerName }
+                }
+                
+                if let peerID = foundPeer {
+                    await MainActor.run {
+                        self.log("✅ 找到设备，尝试连接: \(peerID.displayName)")
+                        self.connectToPeer(peerID)
+                    }
+                    
+                    // Wait a bit and check if connected
+                    try? await Task.sleep(nanoseconds: UInt64(3 * 1_000_000_000))
+                    
+                    let connected = await self.isConnected
+                    if connected {
+                        await MainActor.run {
+                            self.log("✅ 自动重连成功")
+                            self.isAutoReconnecting = false
+                        }
+                        return
+                    }
+                } else {
+                    await MainActor.run {
+                        self.log("⏳ 等待设备出现: \(disconnectedPeerName)")
+                    }
+                }
+                
+                // Wait before next attempt
+                try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
+                
+                // Check if we got connected during the wait
+                let connected = await self.isConnected
+                if connected {
+                    await MainActor.run {
+                        self.isAutoReconnecting = false
+                    }
+                    return
+                }
+            }
+            
+            // Only reaches here if task was cancelled
+            await MainActor.run {
+                self.log("🛑 自动重连已停止")
+                self.isAutoReconnecting = false
+            }
+        }
+    }
+    #endif
+    
     // MARK: - macOS Accessibility
     
     #if os(macOS)
@@ -287,11 +407,21 @@ extension MultipeerManager: MCSessionDelegate {
                 self.connectedPeerName = peerID.displayName
                 self.connectionState = .connected
                 self.log("✅ 已连接: \(peerID.displayName)")
+                #if os(macOS)
+                // Cancel any reconnect attempts and save the connected peer
+                self.cancelAutoReconnect()
+                self.saveLastConnectedPeer(peerID)
+                #endif
             case .notConnected:
+                let disconnectedPeerName = peerID.displayName
                 self.isConnected = false
                 self.connectedPeerName = ""
                 self.connectionState = .browsing
-                self.log("❌ 断开连接: \(peerID.displayName)")
+                self.log("❌ 断开连接: \(disconnectedPeerName)")
+                #if os(macOS)
+                // Start auto-reconnect on Mac
+                self.startAutoReconnect(disconnectedPeerName: disconnectedPeerName)
+                #endif
             case .connecting:
                 self.connectionState = .connecting
                 self.log("🔄 正在连接: \(peerID.displayName)")
