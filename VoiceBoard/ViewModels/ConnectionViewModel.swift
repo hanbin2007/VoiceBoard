@@ -275,6 +275,28 @@ class ConnectionViewModel: NSObject, ObservableObject {
             while !Task.isCancelled {
                 attemptCount += 1
                 
+                // Check if already connected or connecting
+                let currentState = await MainActor.run {
+                    (self.isConnected, self.connectionState)
+                }
+                
+                if currentState.0 {
+                    await MainActor.run {
+                        self.log("✅ 已连接，停止自动重连")
+                        self.isAutoReconnecting = false
+                    }
+                    return
+                }
+                
+                // Skip if already connecting
+                if currentState.1 == .connecting {
+                    await MainActor.run {
+                        self.log("⏳ 正在连接中，等待结果...")
+                    }
+                    try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
+                    continue
+                }
+                
                 await MainActor.run {
                     self.log("尝试重连 (第\(attemptCount)次)...")
                 }
@@ -289,7 +311,8 @@ class ConnectionViewModel: NSObject, ObservableObject {
                         self.connectToPeer(peerID)
                     }
                     
-                    try? await Task.sleep(nanoseconds: UInt64(3 * 1_000_000_000))
+                    // Wait longer for connection result
+                    try? await Task.sleep(nanoseconds: UInt64(5 * 1_000_000_000))
                     
                     let connected = await self.isConnected
                     if connected {
@@ -306,14 +329,6 @@ class ConnectionViewModel: NSObject, ObservableObject {
                 }
                 
                 try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
-                
-                let connected = await self.isConnected
-                if connected {
-                    await MainActor.run {
-                        self.isAutoReconnecting = false
-                    }
-                    return
-                }
             }
             
             await MainActor.run {
@@ -322,6 +337,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
             }
         }
     }
+
     
     private func handleCommand(_ command: VoiceBoardCommand) {
         log("收到命令: \(command)")

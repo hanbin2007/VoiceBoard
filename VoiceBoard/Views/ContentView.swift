@@ -9,10 +9,11 @@ import SwiftUI
 
 /// Main content view that routes to platform-specific views
 struct ContentView: View {
-    @StateObject private var viewModel = ConnectionViewModel()
-    
     #if os(iOS)
+    @StateObject private var viewModel = ConnectionViewModel()
     @State private var showConnectionSheet = false
+    #else
+    @EnvironmentObject var viewModel: ConnectionViewModel
     #endif
     
     var body: some View {

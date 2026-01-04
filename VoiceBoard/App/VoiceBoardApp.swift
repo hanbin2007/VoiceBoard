@@ -11,6 +11,7 @@ import SwiftUI
 struct VoiceBoardApp: App {
     #if os(macOS)
     @StateObject private var appState = AppState()
+    @StateObject private var viewModel = ConnectionViewModel()
     #endif
     
     var body: some Scene {
@@ -18,6 +19,7 @@ struct VoiceBoardApp: App {
             ContentView()
             #if os(macOS)
                 .environmentObject(appState)
+                .environmentObject(viewModel)
             #endif
         }
         #if os(macOS)
@@ -29,8 +31,9 @@ struct VoiceBoardApp: App {
         MenuBarExtra {
             MenuBarView()
                 .environmentObject(appState)
+                .environmentObject(viewModel)
         } label: {
-            Image(systemName: "mic.badge.xmark")
+            Image(systemName: viewModel.isConnected ? "mic.fill" : "mic.badge.xmark")
         }
         .menuBarExtraStyle(.window)
         #endif
