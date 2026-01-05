@@ -194,15 +194,24 @@ class KeyboardSimulator {
     private func pressKeyWithCommand(keyCode: Int) {
         let source = CGEventSource(stateID: .hidSystemState)
         
+        // Key down with Command modifier
         if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true) {
             keyDown.flags = .maskCommand
             keyDown.post(tap: .cghidEventTap)
         }
         
+        // Small delay to ensure key press is registered
+        usleep(5000) // 5ms
+        
+        // Key up - clear modifier flag to release Command key
         if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false) {
-            keyUp.flags = .maskCommand
+            // Important: Post key up WITHOUT the command flag to properly release
+            keyUp.flags = []
             keyUp.post(tap: .cghidEventTap)
         }
+        
+        // Additional delay to let system process the key release
+        usleep(10000) // 10ms
     }
 }
 #endif

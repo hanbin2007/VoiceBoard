@@ -59,6 +59,11 @@ class ConnectionViewModel: NSObject, ObservableObject {
     @Published var isAutoReconnecting: Bool = false
     #endif
     
+    #if os(iOS)
+    /// Click-before-input state synced from Mac
+    @Published var clickBeforeInputEnabled: Bool = false
+    #endif
+    
     // MARK: - Private Properties
     
     private let serviceType = "vboard"
@@ -69,6 +74,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
     
     #if os(iOS)
     private let deviceRole = "ios"
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     #else
     private let deviceRole = "mac"
     private var reconnectTask: Task<Void, Never>?
@@ -103,6 +109,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         // Observe transcript changes on iOS to sync with Mac
         #if os(iOS)
         setupTranscriptObserver()
+        setupBackgroundHandling()
         #endif
     }
     
@@ -199,6 +206,53 @@ class ConnectionViewModel: NSObject, ObservableObject {
             .sink { [weak self] newValue in
                 self?.sendCommand(.text(newValue))
             }
+    }
+    
+    private func setupBackgroundHandling() {
+        // Observe scene lifecycle for background/foreground transitions
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.beginBackgroundTask()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.endBackgroundTask()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.log("📱 进入后台，保持连接...")
+        }
+    }
+    
+    private func beginBackgroundTask() {
+        guard backgroundTask == .invalid else { return }
+        
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "VoiceBoardConnection") { [weak self] in
+            // Called when background time is about to expire
+            self?.log("⚠️ 后台时间即将到期")
+            self?.endBackgroundTask()
+        }
+        
+        log("🔄 开始后台任务，保持连接")
+    }
+    
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+        log("✅ 结束后台任务")
     }
     #endif
     
@@ -349,6 +403,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         case .insert(let text):
             if hasAccessibilityPermission {
                 DispatchQueue.global(qos: .userInteractive).async {
+                    self.performClickIfEnabled()
                     KeyboardSimulator.shared.typeText(text)
                 }
             } else {
@@ -358,6 +413,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         case .insertAndEnter(let text):
             if hasAccessibilityPermission {
                 DispatchQueue.global(qos: .userInteractive).async {
+                    self.performClickIfEnabled()
                     KeyboardSimulator.shared.insertTextAndEnter(text)
                 }
             }
@@ -372,6 +428,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         case .clear:
             if hasAccessibilityPermission {
                 DispatchQueue.global(qos: .userInteractive).async {
+                    self.performClickIfEnabled()
                     KeyboardSimulator.shared.clearInputField()
                 }
             }
@@ -379,6 +436,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         case .paste:
             if hasAccessibilityPermission {
                 DispatchQueue.global(qos: .userInteractive).async {
+                    self.performClickIfEnabled()
                     KeyboardSimulator.shared.paste()
                 }
             }
@@ -393,6 +451,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         case .selectAll:
             if hasAccessibilityPermission {
                 DispatchQueue.global(qos: .userInteractive).async {
+                    self.performClickIfEnabled()
                     KeyboardSimulator.shared.selectAll()
                 }
             }
@@ -410,6 +469,42 @@ class ConnectionViewModel: NSObject, ObservableObject {
                     KeyboardSimulator.shared.cut()
                 }
             }
+            
+        case .setClickBeforeInput(let enabled):
+            ClickPositionManager.shared.isEnabled = enabled
+            log("📍 输入前点击已\(enabled ? "启用" : "禁用")")
+            // Sync state back to iOS
+            sendCommand(.clickBeforeInputState(enabled))
+            
+        case .clickBeforeInputState:
+            // This command is only handled by iOS, ignore on Mac
+            break
+        }
+    }
+    
+    /// Perform click at saved position if enabled
+    /// This method should be called from a background thread
+    private func performClickIfEnabled() {
+        // Read state from ClickPositionManager (must be done carefully as it's on main thread)
+        // Since we're called from background, we need to get values synchronously
+        var isEnabled = false
+        var useGlobal = false
+        var position: CGPoint? = nil
+        
+        DispatchQueue.main.sync {
+            let manager = ClickPositionManager.shared
+            isEnabled = manager.isEnabled
+            useGlobal = manager.useGlobalPosition
+            position = manager.getClickPositionForFrontmostApp()
+        }
+        
+        guard isEnabled else { return }
+        
+        if let pos = position {
+            ClickSimulator.shared.simulateClickAndWait(at: pos)
+        } else {
+            // Position not set - log for debugging
+            print("⚠️ 输入前点击已启用但未设置位置 (useGlobal: \(useGlobal))")
         }
     }
     #endif
@@ -454,6 +549,13 @@ extension ConnectionViewModel: MCSessionDelegate {
             if let command = VoiceBoardCommand.decode(from: data) {
                 #if os(macOS)
                 self.handleCommand(command)
+                #endif
+                
+                #if os(iOS)
+                // Handle commands that iOS needs to know about
+                if case .clickBeforeInputState(let enabled) = command {
+                    self.clickBeforeInputEnabled = enabled
+                }
                 #endif
             } else if let text = String(data: data, encoding: .utf8) {
                 self.receivedText = text

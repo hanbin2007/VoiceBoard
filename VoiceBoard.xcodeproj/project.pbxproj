@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FD422D6C2F0A8C6D00B27BC4 /* VoiceBoard.icon in Resources */ = {isa = PBXBuildFile; fileRef = FD422D6B2F0A8C6D00B27BC4 /* VoiceBoard.icon */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FDD2DB502F0A557B00C04591 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		FD422D6B2F0A8C6D00B27BC4 /* VoiceBoard.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = VoiceBoard.icon; sourceTree = "<group>"; };
 		FDD2DB3E2F0A557B00C04591 /* VoiceBoard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoiceBoard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FDD2DB4F2F0A557B00C04591 /* VoiceBoardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoiceBoardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FDD2DB592F0A557B00C04591 /* VoiceBoardUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoiceBoardUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -92,6 +97,7 @@
 				FDD2DB522F0A557B00C04591 /* VoiceBoardTests */,
 				FDD2DB5C2F0A557B00C04591 /* VoiceBoardUITests */,
 				FDD2DB3F2F0A557B00C04591 /* Products */,
+				FD422D6B2F0A8C6D00B27BC4 /* VoiceBoard.icon */,
 			);
 			sourceTree = "<group>";
 		};
@@ -225,6 +231,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FD422D6C2F0A8C6D00B27BC4 /* VoiceBoard.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -285,7 +292,7 @@
 		FDD2DB632F0A557B00C04591 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = VoiceBoard;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
@@ -342,7 +349,7 @@
 		FDD2DB642F0A557B00C04591 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = VoiceBoard;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;

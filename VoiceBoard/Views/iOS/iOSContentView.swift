@@ -13,6 +13,7 @@ struct iOSContentView: View {
     @ObservedObject var viewModel: ConnectionViewModel
     @Binding var showConnectionSheet: Bool
     @FocusState private var isTextEditorFocused: Bool
+    @State private var showSettingsSheet: Bool = false
     
     var body: some View {
         NavigationStack {
@@ -20,11 +21,8 @@ struct iOSContentView: View {
                 ScrollViewReader { scrollProxy in
                     ScrollView {
                         VStack(spacing: 12) {
-                            // Connection Status Card (tappable)
-                            connectionCard
-                                .onTapGesture {
-                                    showConnectionSheet = true
-                                }
+                            // Connection Status (small text)
+                            connectionStatusText
                             
                             // Transcript Display
                             transcriptView
@@ -44,6 +42,11 @@ struct iOSContentView: View {
             .navigationTitle("VoiceBoard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { showSettingsSheet = true }) {
+                        Image(systemName: "gearshape")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showConnectionSheet = true }) {
                         Image(systemName: "antenna.radiowaves.left.and.right")
@@ -61,38 +64,34 @@ struct iOSContentView: View {
             .sheet(isPresented: $showConnectionSheet) {
                 ConnectionManagementView(viewModel: viewModel)
             }
+            .sheet(isPresented: $showSettingsSheet) {
+                iOSSettingsView()
+            }
+            .onAppear {
+                // Apply idle timer setting from preferences
+                iOSSettings.shared.updateIdleTimer()
+            }
         }
     }
     
     // MARK: - Subviews
     
-    private var connectionCard: some View {
-        HStack {
+    private var connectionStatusText: some View {
+        HStack(spacing: 6) {
             Circle()
                 .fill(viewModel.isConnected ? Color.green : Color.orange)
-                .frame(width: 12, height: 12)
+                .frame(width: 8, height: 8)
             
-            VStack(alignment: .leading, spacing: 2) {
-                if viewModel.isConnected {
-                    Text("已连接: \(viewModel.connectedPeerName)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                } else {
-                    Text(viewModel.connectionState.rawValue)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
+            if viewModel.isConnected {
+                Text("已连接: \(viewModel.connectedPeerName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(viewModel.connectionState.rawValue)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            
-            Spacer()
-            
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
     private var transcriptView: some View {

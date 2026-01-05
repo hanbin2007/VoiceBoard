@@ -39,6 +39,12 @@ enum VoiceBoardCommand: Codable {
     /// Cut selected text (⌘X)
     case cut
     
+    /// Set click-before-input enabled state on Mac
+    case setClickBeforeInput(Bool)
+    
+    /// Sync click-before-input state from Mac to iOS (for display purposes)
+    case clickBeforeInputState(Bool)
+    
     // MARK: - Encoding
     
     func encode() -> Data? {

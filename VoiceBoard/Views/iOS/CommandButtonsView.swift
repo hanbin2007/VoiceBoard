@@ -23,11 +23,13 @@ struct CommandButton: View {
             VStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.system(size: 20))
+                    .frame(height: 24)
                 Text(title)
                     .font(.caption2)
+                    .frame(height: 14)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
+            .frame(height: 54)
             .background(disabled ? Color(.systemGray5) : color.opacity(0.15))
             .foregroundStyle(disabled ? .secondary : color)
             .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -45,6 +47,29 @@ struct ControlButtonsPanel: View {
     
     var body: some View {
         VStack(spacing: 12) {
+            // Click Before Input Toggle
+            HStack {
+                Image(systemName: "cursorarrow.click.2")
+                    .foregroundStyle(.blue)
+                Text("输入前点击")
+                    .font(.subheadline)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { viewModel.clickBeforeInputEnabled },
+                    set: { newValue in
+                        viewModel.clickBeforeInputEnabled = newValue
+                        viewModel.sendCommand(.setClickBeforeInput(newValue))
+                    }
+                ))
+                    .labelsHidden()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .disabled(!viewModel.isConnected)
+            .opacity(viewModel.isConnected ? 1.0 : 0.5)
+            
             // Primary Actions Row
             HStack(spacing: 12) {
                 // Insert Text Button

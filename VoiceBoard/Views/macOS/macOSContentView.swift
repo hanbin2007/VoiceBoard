@@ -13,6 +13,7 @@ import MultipeerConnectivity
 struct macOSContentView: View {
     @ObservedObject var viewModel: ConnectionViewModel
     @EnvironmentObject var appState: AppState
+    @ObservedObject var clickPositionManager = ClickPositionManager.shared
     @State private var showLogs = false
     
     var body: some View {
@@ -71,6 +72,67 @@ struct macOSContentView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            
+            // Click Before Input Settings
+            GroupBox("输入前点击") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("启用输入前点击", isOn: $clickPositionManager.isEnabled)
+                        .toggleStyle(.switch)
+                        .onChange(of: clickPositionManager.isEnabled) { _, newValue in
+                            // Sync to iOS when Mac toggle changes
+                            viewModel.sendCommand(.clickBeforeInputState(newValue))
+                        }
+                    
+                    if clickPositionManager.isEnabled {
+                        Toggle("忽略应用绑定", isOn: $clickPositionManager.useGlobalPosition)
+                            .toggleStyle(.switch)
+                            .help("开启后使用最后设置的位置，忽略应用绑定")
+                        
+                        Divider()
+                        
+                        Button(action: {
+                            startCrosshairPositioning()
+                        }) {
+                            Label("设置点击位置", systemImage: "target")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!viewModel.hasAccessibilityPermission)
+                        
+                        // Show saved positions
+                        let positions = clickPositionManager.getAllPositionsWithNames()
+                        if !positions.isEmpty {
+                            Divider()
+                            Text("已保存的位置")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            
+                            ForEach(positions.prefix(5), id: \.bundleID) { item in
+                                HStack {
+                                    Image(systemName: "app.fill")
+                                        .foregroundStyle(.blue)
+                                        .frame(width: 16)
+                                    Text(item.appName)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("(\(Int(item.position.x)), \(Int(item.position.y)))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Button(action: {
+                                        clickPositionManager.removeClickPosition(for: item.bundleID)
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .font(.caption)
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -232,5 +294,27 @@ struct macOSContentView: View {
         }
         .padding()
     }
+    
+    // MARK: - Crosshair Positioning
+    
+    private func startCrosshairPositioning() {
+        // Hide our window first so user can see the target app
+        appState.hideWindow()
+        
+        // Small delay to let the window hide and user switch to target app
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            CrosshairWindowManager.shared.showCrosshair { position in
+                // Save position for the frontmost app
+                if let bundleID = clickPositionManager.setClickPositionForFrontmostApp(position) {
+                    let appName = clickPositionManager.getAppName(for: bundleID)
+                    print("📍 已设置点击位置: \(appName) (\(Int(position.x)), \(Int(position.y)))")
+                }
+                
+                // Show our window again
+                appState.showWindow()
+            }
+        }
+    }
 }
 #endif
+
