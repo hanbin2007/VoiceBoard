@@ -69,7 +69,7 @@ struct MenuBarView: View {
                         ProgressView()
                             .scaleEffect(0.5)
                             .frame(width: 16, height: 16)
-                        Text("搜索中...")
+                        Text("等待 iOS 连接...")
                             .foregroundStyle(.secondary)
                     }
                     .font(.caption)
@@ -79,10 +79,7 @@ struct MenuBarView: View {
                     ForEach(viewModel.availablePeers, id: \.displayName) { peer in
                         DeviceRowButton(
                             peer: peer,
-                            isConnected: viewModel.connectedPeerName == peer.displayName,
-                            onConnect: {
-                                viewModel.connectToPeer(peer)
-                            }
+                            isConnected: viewModel.connectedPeerName == peer.displayName
                         )
                     }
                 }
@@ -123,35 +120,30 @@ struct MenuBarView: View {
 private struct DeviceRowButton: View {
     let peer: MCPeerID
     let isConnected: Bool
-    let onConnect: () -> Void
     
     var body: some View {
-        Button(action: onConnect) {
-            HStack(spacing: 8) {
-                Image(systemName: "iphone")
-                    .foregroundStyle(.blue)
-                    .frame(width: 16)
-                
-                Text(peer.displayName)
-                    .lineLimit(1)
-                
-                Spacer()
-                
-                if isConnected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                } else {
-                    Text("连接")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                }
+        HStack(spacing: 8) {
+            Image(systemName: "iphone")
+                .foregroundStyle(.blue)
+                .frame(width: 16)
+            
+            Text(peer.displayName)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            if isConnected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Text("等待连接")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(isConnected)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 }
 

@@ -147,13 +147,7 @@ struct macOSContentView: View {
                     Text(viewModel.connectionState.rawValue)
                     Spacer()
                     
-                    if viewModel.isAutoReconnecting {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                        Text("重连中...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+
                 }
                 .padding(.vertical, 4)
             }
@@ -164,7 +158,7 @@ struct macOSContentView: View {
                     HStack {
                         ProgressView()
                             .scaleEffect(0.6)
-                        Text("搜索中...")
+                        Text("等待 iOS 连接...")
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
@@ -182,11 +176,9 @@ struct macOSContentView: View {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                 } else {
-                                    Button("连接") {
-                                        viewModel.connectToPeer(peer)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
+                                    Text("等待连接")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                             .padding(.vertical, 2)

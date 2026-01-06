@@ -51,12 +51,6 @@ class ConnectionViewModel: NSObject, ObservableObject {
     #if os(macOS)
     /// Accessibility permission status
     @Published var hasAccessibilityPermission: Bool = false
-    
-    /// Whether auto-reconnect is enabled
-    @Published var autoReconnectEnabled: Bool = true
-    
-    /// Whether currently attempting to auto-reconnect
-    @Published var isAutoReconnecting: Bool = false
     #endif
     
     #if os(iOS)
@@ -70,16 +64,18 @@ class ConnectionViewModel: NSObject, ObservableObject {
     private let myPeerID: MCPeerID
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser!
-    private var browser: MCNearbyServiceBrowser!
+    #if os(iOS)
+    private var browser: MCNearbyServiceBrowser?  // Optional - only used on iOS
+    #endif
     
     #if os(iOS)
     private let deviceRole = "ios"
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var reconnectTask: Task<Void, Never>?
+    private let reconnectDelay: TimeInterval = 2.0
+    private let lastConnectedPeerKey = "LastConnectedPeerName"
     #else
     private let deviceRole = "mac"
-    private var reconnectTask: Task<Void, Never>?
-    private let reconnectDelay: TimeInterval = 3.0
-    private let lastConnectedPeerKey = "LastConnectedPeerName"
     #endif
     
     // MARK: - Initialization
@@ -139,6 +135,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
     }
     
     private func startServices() {
+        // Both platforms advertise so they can be discovered
         advertiser = MCNearbyServiceAdvertiser(
             peer: myPeerID,
             discoveryInfo: ["role": deviceRole],
@@ -148,12 +145,21 @@ class ConnectionViewModel: NSObject, ObservableObject {
         advertiser.startAdvertisingPeer()
         log("开始广播服务 (serviceType: \(serviceType))")
         
+        #if os(iOS)
+        // Only iOS browses for Mac devices and initiates connections
         browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
-        browser.delegate = self
-        browser.startBrowsingForPeers()
-        log("开始搜索设备")
-        
+        browser?.delegate = self
+        browser?.startBrowsingForPeers()
+        log("开始搜索 Mac 设备")
         connectionState = .browsing
+        
+        // Auto-connect to last connected device
+        startAutoReconnect()
+        #else
+        // Mac only advertises, waits for iOS to connect
+        log("等待 iOS 设备连接...")
+        connectionState = .browsing
+        #endif
     }
     
     // MARK: - Public Methods
@@ -163,7 +169,9 @@ class ConnectionViewModel: NSObject, ObservableObject {
         log("重启服务...")
         
         advertiser?.stopAdvertisingPeer()
+        #if os(iOS)
         browser?.stopBrowsingForPeers()
+        #endif
         session?.disconnect()
         
         availablePeers.removeAll()
@@ -175,12 +183,14 @@ class ConnectionViewModel: NSObject, ObservableObject {
         startServices()
     }
     
-    /// Connect to a specific peer
+    #if os(iOS)
+    /// Connect to a specific peer (iOS only initiates connections)
     func connectToPeer(_ peerID: MCPeerID) {
         log("尝试连接: \(peerID.displayName)")
         connectionState = .connecting
-        browser.invitePeer(peerID, to: session, withContext: nil, timeout: 30)
+        browser?.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
     }
+    #endif
     
     /// Send a command to connected peer
     func sendCommand(_ command: VoiceBoardCommand) {
@@ -254,6 +264,97 @@ class ConnectionViewModel: NSObject, ObservableObject {
         backgroundTask = .invalid
         log("✅ 结束后台任务")
     }
+    
+    // MARK: - iOS Auto Reconnect
+    
+    var lastConnectedPeerName: String? {
+        get { UserDefaults.standard.string(forKey: lastConnectedPeerKey) }
+        set { UserDefaults.standard.set(newValue, forKey: lastConnectedPeerKey) }
+    }
+    
+    private func saveLastConnectedPeer(_ peerID: MCPeerID) {
+        lastConnectedPeerName = peerID.displayName
+        log("💾 已保存最后连接的设备: \(peerID.displayName)")
+    }
+    
+    func cancelAutoReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        log("🛑 已取消自动重连")
+    }
+    
+    private func startAutoReconnect() {
+        guard let targetPeerName = lastConnectedPeerName else {
+            log("📱 无上次连接记录，等待手动选择设备")
+            return
+        }
+        
+        guard !isConnected else { return }
+        
+        reconnectTask?.cancel()
+        log("🔄 自动连接上次设备: \(targetPeerName)")
+        
+        reconnectTask = Task { [weak self] in
+            guard let self = self else { return }
+            var attemptCount = 0
+            
+            while !Task.isCancelled {
+                attemptCount += 1
+                
+                let currentState = await MainActor.run {
+                    (self.isConnected, self.connectionState)
+                }
+                
+                if currentState.0 {
+                    await MainActor.run {
+                        self.log("✅ 已连接，停止自动重连")
+                    }
+                    return
+                }
+                
+                if currentState.1 == .connecting {
+                    try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
+                    continue
+                }
+                
+                let foundPeer = await MainActor.run { () -> MCPeerID? in
+                    return self.availablePeers.first { $0.displayName == targetPeerName }
+                }
+                
+                if let peerID = foundPeer {
+                    await MainActor.run {
+                        self.log("✅ 找到 \(peerID.displayName)，正在连接...")
+                        self.connectToPeer(peerID)
+                    }
+                    
+                    // Wait for connection result
+                    try? await Task.sleep(nanoseconds: UInt64(3 * 1_000_000_000))
+                    
+                    let connected = await self.isConnected
+                    if connected {
+                        await MainActor.run {
+                            self.log("✅ 自动连接成功")
+                        }
+                        return
+                    }
+                } else if attemptCount <= 3 {
+                    await MainActor.run {
+                        self.log("⏳ 等待发现设备: \(targetPeerName) (第\(attemptCount)次)")
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
+                
+                // Give up after 10 attempts
+                if attemptCount >= 10 {
+                    await MainActor.run {
+                        self.log("⚠️ 自动连接超时，请手动选择设备")
+                    }
+                    return
+                }
+            }
+        }
+    }
     #endif
     
     // MARK: - macOS Specific
@@ -279,118 +380,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         log("已请求辅助功能权限，请在系统设置中授权")
     }
     
-    // MARK: - Auto Reconnection (macOS only)
-    
-    var lastConnectedPeerName: String? {
-        get { UserDefaults.standard.string(forKey: lastConnectedPeerKey) }
-        set { UserDefaults.standard.set(newValue, forKey: lastConnectedPeerKey) }
-    }
-    
-    private func saveLastConnectedPeer(_ peerID: MCPeerID) {
-        lastConnectedPeerName = peerID.displayName
-        log("💾 已保存最后连接的设备: \(peerID.displayName)")
-    }
-    
-    func cancelAutoReconnect() {
-        reconnectTask?.cancel()
-        reconnectTask = nil
-        isAutoReconnecting = false
-        log("🛑 已取消自动重连")
-    }
-    
-    func toggleAutoReconnect(_ enabled: Bool) {
-        autoReconnectEnabled = enabled
-        if !enabled {
-            cancelAutoReconnect()
-        }
-        log("自动重连: \(enabled ? "已启用" : "已禁用")")
-    }
-    
-    private func startAutoReconnect(disconnectedPeerName: String) {
-        guard autoReconnectEnabled else {
-            log("自动重连已禁用，跳过")
-            return
-        }
-        
-        guard !isConnected else {
-            log("已连接，跳过自动重连")
-            return
-        }
-        
-        reconnectTask?.cancel()
-        isAutoReconnecting = true
-        
-        log("🔄 开始自动重连: \(disconnectedPeerName)")
-        
-        reconnectTask = Task { [weak self] in
-            guard let self = self else { return }
-            var attemptCount = 0
-            
-            while !Task.isCancelled {
-                attemptCount += 1
-                
-                // Check if already connected or connecting
-                let currentState = await MainActor.run {
-                    (self.isConnected, self.connectionState)
-                }
-                
-                if currentState.0 {
-                    await MainActor.run {
-                        self.log("✅ 已连接，停止自动重连")
-                        self.isAutoReconnecting = false
-                    }
-                    return
-                }
-                
-                // Skip if already connecting
-                if currentState.1 == .connecting {
-                    await MainActor.run {
-                        self.log("⏳ 正在连接中，等待结果...")
-                    }
-                    try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
-                    continue
-                }
-                
-                await MainActor.run {
-                    self.log("尝试重连 (第\(attemptCount)次)...")
-                }
-                
-                let foundPeer = await MainActor.run { () -> MCPeerID? in
-                    return self.availablePeers.first { $0.displayName == disconnectedPeerName }
-                }
-                
-                if let peerID = foundPeer {
-                    await MainActor.run {
-                        self.log("✅ 找到设备，尝试连接: \(peerID.displayName)")
-                        self.connectToPeer(peerID)
-                    }
-                    
-                    // Wait longer for connection result
-                    try? await Task.sleep(nanoseconds: UInt64(5 * 1_000_000_000))
-                    
-                    let connected = await self.isConnected
-                    if connected {
-                        await MainActor.run {
-                            self.log("✅ 自动重连成功")
-                            self.isAutoReconnecting = false
-                        }
-                        return
-                    }
-                } else {
-                    await MainActor.run {
-                        self.log("⏳ 等待设备出现: \(disconnectedPeerName)")
-                    }
-                }
-                
-                try? await Task.sleep(nanoseconds: UInt64(self.reconnectDelay * 1_000_000_000))
-            }
-            
-            await MainActor.run {
-                self.log("🛑 自动重连已停止")
-                self.isAutoReconnecting = false
-            }
-        }
-    }
+
 
     
     private func handleCommand(_ command: VoiceBoardCommand) {
@@ -523,8 +513,7 @@ extension ConnectionViewModel: MCSessionDelegate {
                 self.connectionState = .connected
                 self.log("✅ 已连接: \(peerID.displayName)")
                 #if os(macOS)
-                self.cancelAutoReconnect()
-                self.saveLastConnectedPeer(peerID)
+                // macOS waits for connection
                 #endif
             case .notConnected:
                 let disconnectedPeerName = peerID.displayName
@@ -533,7 +522,7 @@ extension ConnectionViewModel: MCSessionDelegate {
                 self.connectionState = .browsing
                 self.log("❌ 断开连接: \(disconnectedPeerName)")
                 #if os(macOS)
-                self.startAutoReconnect(disconnectedPeerName: disconnectedPeerName)
+                // Auto-reconnect removed
                 #endif
             case .connecting:
                 self.connectionState = .connecting
@@ -591,8 +580,10 @@ extension ConnectionViewModel: MCNearbyServiceAdvertiserDelegate {
     }
 }
 
+
 // MARK: - MCNearbyServiceBrowserDelegate
 
+#if os(iOS)
 extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
     
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
@@ -620,3 +611,4 @@ extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
         }
     }
 }
+#endif
