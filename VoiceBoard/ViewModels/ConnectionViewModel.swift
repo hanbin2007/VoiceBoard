@@ -512,8 +512,8 @@ extension ConnectionViewModel: MCSessionDelegate {
                 self.connectedPeerName = peerID.displayName
                 self.connectionState = .connected
                 self.log("✅ 已连接: \(peerID.displayName)")
-                #if os(macOS)
-                // macOS waits for connection
+                #if os(iOS)
+                self.saveLastConnectedPeer(peerID)
                 #endif
             case .notConnected:
                 let disconnectedPeerName = peerID.displayName
