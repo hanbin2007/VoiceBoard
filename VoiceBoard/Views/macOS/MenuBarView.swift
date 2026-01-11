@@ -79,7 +79,9 @@ struct MenuBarView: View {
                     ForEach(viewModel.availablePeers, id: \.displayName) { peer in
                         DeviceRowButton(
                             peer: peer,
-                            isConnected: viewModel.connectedPeerName == peer.displayName
+                            isConnected: viewModel.connectedPeerName == peer.displayName,
+                            isConnecting: viewModel.connectionState == .connecting,
+                            onConnect: { viewModel.connectToPeer(peer) }
                         )
                     }
                 }
@@ -120,6 +122,8 @@ struct MenuBarView: View {
 private struct DeviceRowButton: View {
     let peer: MCPeerID
     let isConnected: Bool
+    let isConnecting: Bool
+    let onConnect: () -> Void
     
     var body: some View {
         HStack(spacing: 8) {
@@ -135,10 +139,16 @@ private struct DeviceRowButton: View {
             if isConnected {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            } else if isConnecting {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 16, height: 16)
             } else {
-                Text("等待连接")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button("连接") {
+                    onConnect()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
             }
         }
         .padding(.horizontal, 12)

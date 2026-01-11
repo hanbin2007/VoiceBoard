@@ -175,10 +175,15 @@ struct macOSContentView: View {
                                 if viewModel.connectedPeerName == peer.displayName {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
+                                } else if viewModel.connectionState == .connecting {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
                                 } else {
-                                    Text("等待连接")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    Button("连接") {
+                                        viewModel.connectToPeer(peer)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
                                 }
                             }
                             .padding(.vertical, 2)

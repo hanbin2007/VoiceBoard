@@ -7,5 +7,7 @@
 		<string>_vboard._tcp</string>
 		<string>_vboard._udp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相机拍摄照片以复制到剪切板</string>
 </dict>
 </plist>

@@ -14,6 +14,7 @@ struct iOSContentView: View {
     @Binding var showConnectionSheet: Bool
     @FocusState private var isTextEditorFocused: Bool
     @State private var showSettingsSheet: Bool = false
+    @State private var showPhotoPickerSheet: Bool = false
     
     var body: some View {
         NavigationStack {
@@ -48,8 +49,13 @@ struct iOSContentView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showConnectionSheet = true }) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    HStack(spacing: 16) {
+                        Button(action: { showPhotoPickerSheet = true }) {
+                            Image(systemName: "camera.fill")
+                        }
+                        Button(action: { showConnectionSheet = true }) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
                     }
                 }
                 ToolbarItem(placement: .keyboard) {
@@ -66,6 +72,9 @@ struct iOSContentView: View {
             }
             .sheet(isPresented: $showSettingsSheet) {
                 iOSSettingsView()
+            }
+            .sheet(isPresented: $showPhotoPickerSheet) {
+                PhotoPickerView(viewModel: PhotoPickerViewModel(connectionViewModel: viewModel))
             }
             .onAppear {
                 // Apply idle timer setting from preferences

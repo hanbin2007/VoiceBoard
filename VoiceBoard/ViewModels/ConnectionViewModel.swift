@@ -64,9 +64,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
     private let myPeerID: MCPeerID
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser!
-    #if os(iOS)
-    private var browser: MCNearbyServiceBrowser?  // Optional - only used on iOS
-    #endif
+    private var browser: MCNearbyServiceBrowser?  // Used on both platforms for bidirectional connection
     
     #if os(iOS)
     private let deviceRole = "ios"
@@ -145,20 +143,18 @@ class ConnectionViewModel: NSObject, ObservableObject {
         advertiser.startAdvertisingPeer()
         log("开始广播服务 (serviceType: \(serviceType))")
         
-        #if os(iOS)
-        // Only iOS browses for Mac devices and initiates connections
+        // Both platforms browse for peers (bidirectional connection support)
         browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
         browser?.delegate = self
         browser?.startBrowsingForPeers()
-        log("开始搜索 Mac 设备")
         connectionState = .browsing
         
-        // Auto-connect to last connected device
+        #if os(iOS)
+        log("开始搜索 Mac 设备")
+        // Auto-connect to last connected device (iOS only)
         startAutoReconnect()
         #else
-        // Mac only advertises, waits for iOS to connect
-        log("等待 iOS 设备连接...")
-        connectionState = .browsing
+        log("开始搜索 iOS 设备")
         #endif
     }
     
@@ -169,9 +165,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         log("重启服务...")
         
         advertiser?.stopAdvertisingPeer()
-        #if os(iOS)
         browser?.stopBrowsingForPeers()
-        #endif
         session?.disconnect()
         
         availablePeers.removeAll()
@@ -183,14 +177,12 @@ class ConnectionViewModel: NSObject, ObservableObject {
         startServices()
     }
     
-    #if os(iOS)
-    /// Connect to a specific peer (iOS only initiates connections)
+    /// Connect to a specific peer (both platforms can initiate connections)
     func connectToPeer(_ peerID: MCPeerID) {
         log("尝试连接: \(peerID.displayName)")
         connectionState = .connecting
         browser?.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
     }
-    #endif
     
     /// Send a command to connected peer
     func sendCommand(_ command: VoiceBoardCommand) {
@@ -583,17 +575,41 @@ extension ConnectionViewModel: MCNearbyServiceAdvertiserDelegate {
 
 // MARK: - MCNearbyServiceBrowserDelegate
 
-#if os(iOS)
 extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
     
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
         Task { @MainActor in
             let role = info?["role"] ?? "unknown"
+            
+            // Filter peers by role: iOS shows only mac, macOS shows only ios
+            #if os(iOS)
+            guard role == "mac" else {
+                self.log("🔍 忽略非 Mac 设备: \(peerID.displayName) (角色: \(role))")
+                return
+            }
+            #else
+            guard role == "ios" else {
+                self.log("🔍 忽略非 iOS 设备: \(peerID.displayName) (角色: \(role))")
+                return
+            }
+            #endif
+            
             self.log("🔍 发现设备: \(peerID.displayName) (角色: \(role))")
             
             if !self.availablePeers.contains(peerID) {
                 self.availablePeers.append(peerID)
             }
+            
+            // iOS: Immediate auto-reconnect when target device is discovered
+            #if os(iOS)
+            if let targetName = self.lastConnectedPeerName,
+               peerID.displayName == targetName,
+               !self.isConnected,
+               self.connectionState != .connecting {
+                self.log("🔄 发现目标设备，立即自动连接: \(peerID.displayName)")
+                self.connectToPeer(peerID)
+            }
+            #endif
         }
     }
     
@@ -611,4 +627,3 @@ extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
         }
     }
 }
-#endif
