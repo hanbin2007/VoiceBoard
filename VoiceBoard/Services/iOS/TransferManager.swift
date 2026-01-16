@@ -109,11 +109,23 @@ final class TransferManager: ObservableObject {
                 await service.updateTransferProgress(current: index + 1, total: total, progress: 0)
                 
                 // Wait for transfer to complete using fractionCompleted
+                // Also observe isCancelled to detect when transfer is cancelled
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                     var hasResumed = false
-                    var observation: NSKeyValueObservation?
+                    var fractionObservation: NSKeyValueObservation?
+                    var cancelledObservation: NSKeyValueObservation?
                     
-                    observation = progress.observe(\.fractionCompleted, options: [.new]) { [weak service] prog, _ in
+                    // Helper to clean up and resume
+                    let cleanup = {
+                        guard !hasResumed else { return }
+                        hasResumed = true
+                        fractionObservation?.invalidate()
+                        cancelledObservation?.invalidate()
+                        continuation.resume()
+                    }
+                    
+                    // Observe fractionCompleted for progress updates
+                    fractionObservation = progress.observe(\.fractionCompleted, options: [.new]) { [weak service] prog, _ in
                         // Update progress UI
                         Task { @MainActor in
                             service?.updateTransferProgress(
@@ -124,28 +136,38 @@ final class TransferManager: ObservableObject {
                         }
                         
                         // Check if transfer completed (fractionCompleted >= 1.0)
-                        if prog.fractionCompleted >= 1.0 && !hasResumed {
-                            hasResumed = true
-                            observation?.invalidate()
-                            continuation.resume()
+                        if prog.fractionCompleted >= 1.0 {
+                            cleanup()
+                        }
+                    }
+                    
+                    // Observe isCancelled to detect when transfer is cancelled
+                    cancelledObservation = progress.observe(\.isCancelled, options: [.new]) { prog, _ in
+                        if prog.isCancelled {
+                            cleanup()
                         }
                     }
                     
                     // Store to prevent deallocation
-                    objc_setAssociatedObject(progress, "kvo", observation, .OBJC_ASSOCIATION_RETAIN)
+                    objc_setAssociatedObject(progress, "kvoFraction", fractionObservation, .OBJC_ASSOCIATION_RETAIN)
+                    objc_setAssociatedObject(progress, "kvoCancelled", cancelledObservation, .OBJC_ASSOCIATION_RETAIN)
+                    
+                    // Check immediately in case already cancelled or completed
+                    if progress.isCancelled || progress.fractionCompleted >= 1.0 {
+                        cleanup()
+                    }
                     
                     // Safety timeout: resume after 60 seconds even if not complete
                     Task {
                         try? await Task.sleep(nanoseconds: 60_000_000_000)
-                        if !hasResumed {
-                            hasResumed = true
-                            observation?.invalidate()
-                            continuation.resume()
-                        }
+                        cleanup()
                     }
                 }
                 
-                successCount += 1
+                // Only count as success if transfer actually completed (not cancelled)
+                if progress.fractionCompleted >= 1.0 && !progress.isCancelled {
+                    successCount += 1
+                }
             }
         }
         
