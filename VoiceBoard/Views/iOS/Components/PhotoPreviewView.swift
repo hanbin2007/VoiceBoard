@@ -3,7 +3,9 @@
 //  VoiceBoard
 //
 
+#if os(iOS)
 import SwiftUI
+import UIKit
 
 struct PhotoPreviewView: View {
     let images: [UIImage]
@@ -74,3 +76,4 @@ extension View {
         modifier(PinchToZoomModifier())
     }
 }
+#endif

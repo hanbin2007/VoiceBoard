@@ -89,6 +89,7 @@ struct ControlButtonsPanel: View {
                     color: .green,
                     disabled: !viewModel.isConnected || transcript.isEmpty
                 ) {
+                    viewModel.addToHistory(transcript)
                     viewModel.sendCommand(.insertAndEnter(transcript))
                     transcript = ""
                 }

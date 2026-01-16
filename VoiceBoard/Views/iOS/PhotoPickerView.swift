@@ -2,7 +2,8 @@
 //  PhotoPickerView.swift
 //  VoiceBoard
 //
-//  View for capturing multiple photos and copying to clipboard
+//  View for capturing multiple photos and sending to Mac
+//  Follows MVVM pattern - View only handles UI, delegates logic to ViewModel
 //
 
 #if os(iOS)
@@ -12,6 +13,7 @@ import PhotosUI
 /// View for capturing and managing multiple photos
 struct PhotoPickerView: View {
     @StateObject var viewModel: PhotoPickerViewModel
+    @ObservedObject private var transferManager = TransferManager.shared
     @Environment(\.dismiss) private var dismiss
     
     // Grid layout
@@ -71,6 +73,18 @@ struct PhotoPickerView: View {
                 }
             } message: {
                 Text("请在设置中允许访问相机以拍摄照片")
+            }
+            .onChange(of: viewModel.hapticEvent) { _, event in
+                guard let event = event else { return }
+                let generator = UINotificationFeedbackGenerator()
+                switch event {
+                case .success:
+                    generator.notificationOccurred(.success)
+                case .error:
+                    generator.notificationOccurred(.error)
+                case .warning:
+                    generator.notificationOccurred(.warning)
+                }
             }
         }
     }
@@ -137,7 +151,7 @@ struct PhotoPickerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             
-            // Copy to Clipboard Button
+            // Copy and Send Button
             if !viewModel.capturedPhotos.isEmpty {
                 Button(action: {
                     viewModel.copyAndSend()
@@ -153,6 +167,7 @@ struct PhotoPickerView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .disabled(transferManager.transferState.isInProgress)
             }
             
             // Clear All Button
@@ -180,12 +195,12 @@ struct PhotoPickerView: View {
     
     private var toastView: some View {
         Group {
-            if viewModel.showToast {
+            if viewModel.toastState.isVisible {
                 VStack {
                     Spacer()
                     HStack {
                         Image(systemName: "checkmark.circle.fill")
-                        Text(viewModel.toastMessage)
+                        Text(viewModel.toastState.message)
                     }
                     .padding()
                     .background(.ultraThinMaterial)
@@ -197,6 +212,7 @@ struct PhotoPickerView: View {
                 .zIndex(100)
             }
         }
+        .animation(.spring(), value: viewModel.toastState.isVisible)
     }
     
     private var emptyStateView: some View {
@@ -213,9 +229,12 @@ struct PhotoPickerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    
 }
 
-// Helper for Identifiable Int
+// MARK: - Helper Types
+
+/// Wrapper for Int to make it Identifiable
 struct IdentifiableInt: Identifiable {
     let id: Int
 }

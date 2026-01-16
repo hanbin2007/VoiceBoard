@@ -9,6 +9,12 @@ import Foundation
 import MultipeerConnectivity
 import Combine
 
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
+
 /// Connection state for UI display
 enum ConnectionState: String {
     case idle = "未启动"
@@ -56,6 +62,11 @@ class ConnectionViewModel: NSObject, ObservableObject {
     #if os(iOS)
     /// Click-before-input state synced from Mac
     @Published var clickBeforeInputEnabled: Bool = false
+    
+    /// Message history for resend functionality
+    @Published var messageHistory: [MessageHistoryItem] = []
+    private let messageHistoryKey = "MessageHistory"
+    private let maxHistoryItems = 50
     #endif
     
     // MARK: - Private Properties
@@ -104,6 +115,7 @@ class ConnectionViewModel: NSObject, ObservableObject {
         #if os(iOS)
         setupTranscriptObserver()
         setupBackgroundHandling()
+        loadHistory()
         #endif
     }
     
@@ -186,16 +198,56 @@ class ConnectionViewModel: NSObject, ObservableObject {
     
     /// Send a command to connected peer
     func sendCommand(_ command: VoiceBoardCommand) {
-        guard !session.connectedPeers.isEmpty else { return }
+        guard !session.connectedPeers.isEmpty else {
+            log("发送失败: 没有连接的设备")
+            return
+        }
         
         if let data = command.encode() {
+            // Log data size for debugging
+            let sizeKB = Double(data.count) / 1024.0
+            let sizeMB = sizeKB / 1024.0
+            if sizeMB > 1 {
+                log("发送数据: \(String(format: "%.2f", sizeMB)) MB")
+            } else {
+                log("发送数据: \(String(format: "%.1f", sizeKB)) KB")
+            }
+            
             do {
                 try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+                log("发送成功")
             } catch {
                 log("发送命令失败: \(error.localizedDescription)")
             }
+        } else {
+            log("命令编码失败")
         }
     }
+    
+    #if os(iOS)
+    /// Send image file via sendResource for efficient streaming
+    /// Returns Progress object for tracking, or nil if transfer cannot start
+    @discardableResult
+    func sendImageResource(at url: URL, resourceName: String) -> Progress? {
+        guard let peer = session.connectedPeers.first else {
+            log("发送资源失败: 没有连接的设备")
+            return nil
+        }
+        
+        let progress = session.sendResource(at: url, withName: resourceName, toPeer: peer) { [weak self] error in
+            Task { @MainActor in
+                if let error = error {
+                    self?.log("资源传输失败: \(error.localizedDescription)")
+                } else {
+                    self?.log("资源传输完成: \(resourceName)")
+                }
+            }
+        }
+        
+        log("开始传输资源: \(resourceName)")
+        return progress
+    }
+    #endif
     
     // MARK: - iOS Specific
     
@@ -273,6 +325,91 @@ class ConnectionViewModel: NSObject, ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         log("🛑 已取消自动重连")
+    }
+    
+    // MARK: - Message History Management
+    
+    /// Add a message to history
+    func addToHistory(_ content: String) {
+        guard !content.isEmpty else { return }
+        
+        // Check if the same content was sent recently (within 2 seconds)
+        if let lastItem = messageHistory.first,
+           lastItem.content == content,
+           Date().timeIntervalSince(lastItem.sentAt) < 2.0 {
+            return
+        }
+        
+        let item = MessageHistoryItem(content: content)
+        messageHistory.insert(item, at: 0)
+        
+        // Limit history size
+        if messageHistory.count > maxHistoryItems {
+            messageHistory = Array(messageHistory.prefix(maxHistoryItems))
+        }
+        
+        saveHistory()
+        log("📝 已添加到历史记录")
+    }
+    
+    /// Resend a message from history
+    func resendMessage(_ item: MessageHistoryItem) {
+        guard isConnected else {
+            log("重发失败: 未连接")
+            return
+        }
+        
+        sendCommand(.insertAndEnter(item.content))
+        log("🔄 重发消息: \(item.content.prefix(30))...")
+        
+        // Move the resent item to top of history
+        if let index = messageHistory.firstIndex(of: item) {
+            messageHistory.remove(at: index)
+        }
+        let newItem = MessageHistoryItem(content: item.content)
+        messageHistory.insert(newItem, at: 0)
+        saveHistory()
+    }
+    
+    /// Insert a message from history (without pressing Enter)
+    func insertMessage(_ item: MessageHistoryItem) {
+        guard isConnected else {
+            log("插入失败: 未连接")
+            return
+        }
+        
+        sendCommand(.insert(item.content))
+        log("📥 插入消息: \(item.content.prefix(30))...")
+    }
+    
+    /// Delete a single history item
+    func deleteHistoryItem(_ item: MessageHistoryItem) {
+        messageHistory.removeAll { $0.id == item.id }
+        saveHistory()
+        log("🗑️ 已删除历史记录")
+    }
+    
+    /// Clear all history
+    func clearHistory() {
+        messageHistory.removeAll()
+        saveHistory()
+        log("🗑️ 已清空所有历史记录")
+    }
+    
+    /// Save history to UserDefaults
+    private func saveHistory() {
+        if let data = try? JSONEncoder().encode(messageHistory) {
+            UserDefaults.standard.set(data, forKey: messageHistoryKey)
+        }
+    }
+    
+    /// Load history from UserDefaults
+    private func loadHistory() {
+        if let data = UserDefaults.standard.data(forKey: messageHistoryKey),
+           let items = try? JSONDecoder().decode([MessageHistoryItem].self, from: data) {
+            messageHistory = items
+            log("📚 已加载 \(items.count) 条历史记录")
+        }
     }
     
     private func startAutoReconnect() {
@@ -378,90 +515,29 @@ class ConnectionViewModel: NSObject, ObservableObject {
     private func handleCommand(_ command: VoiceBoardCommand) {
         log("收到命令: \(command)")
         
-        switch command {
-        case .text(let text):
+        // Handle text preview locally
+        if case .text(let text) = command {
             receivedText = text
-            
-        case .insert(let text):
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.performClickIfEnabled()
-                    KeyboardSimulator.shared.typeText(text)
-                }
-            } else {
-                log("⚠️ 未授权辅助功能")
-            }
-            
-        case .insertAndEnter(let text):
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.performClickIfEnabled()
-                    KeyboardSimulator.shared.insertTextAndEnter(text)
-                }
-            }
-            
-        case .enter:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    KeyboardSimulator.shared.pressEnter()
-                }
-            }
-            
-        case .clear:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.performClickIfEnabled()
-                    KeyboardSimulator.shared.clearInputField()
-                }
-            }
-            
-        case .paste:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.performClickIfEnabled()
-                    KeyboardSimulator.shared.paste()
-                }
-            }
-            
-        case .delete:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    KeyboardSimulator.shared.pressDelete()
-                }
-            }
-            
-        case .selectAll:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    self.performClickIfEnabled()
-                    KeyboardSimulator.shared.selectAll()
-                }
-            }
-            
-        case .copy:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    KeyboardSimulator.shared.copy()
-                }
-            }
-            
-        case .cut:
-            if hasAccessibilityPermission {
-                DispatchQueue.global(qos: .userInteractive).async {
-                    KeyboardSimulator.shared.cut()
-                }
-            }
-            
-        case .setClickBeforeInput(let enabled):
-            ClickPositionManager.shared.isEnabled = enabled
-            log("📍 输入前点击已\(enabled ? "启用" : "禁用")")
-            // Sync state back to iOS
-            sendCommand(.clickBeforeInputState(enabled))
-            
-        case .clickBeforeInputState:
-            // This command is only handled by iOS, ignore on Mac
-            break
+            return
         }
+        
+        // Delegate other commands to CommandHandler
+        let context = CommandContext(
+            hasAccessibilityPermission: hasAccessibilityPermission,
+            performClickIfEnabled: { [weak self] in
+                self?.performClickIfEnabled()
+            },
+            sendResponse: { [weak self] response in
+                self?.sendCommand(response)
+            },
+            log: { [weak self] message in
+                Task { @MainActor in
+                    self?.log(message)
+                }
+            }
+        )
+        
+        CommandHandler.shared.handle(command, context: context)
     }
     
     /// Perform click at saved position if enabled
@@ -527,7 +603,17 @@ extension ConnectionViewModel: MCSessionDelegate {
     
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
+            // Log received data size
+            let sizeKB = Double(data.count) / 1024.0
+            let sizeMB = sizeKB / 1024.0
+            if sizeMB > 1 {
+                self.log("收到数据: \(String(format: "%.2f", sizeMB)) MB")
+            } else {
+                self.log("收到数据: \(String(format: "%.1f", sizeKB)) KB")
+            }
+            
             if let command = VoiceBoardCommand.decode(from: data) {
+                self.log("解码命令成功: \(command)")
                 #if os(macOS)
                 self.handleCommand(command)
                 #endif
@@ -541,15 +627,98 @@ extension ConnectionViewModel: MCSessionDelegate {
             } else if let text = String(data: data, encoding: .utf8) {
                 self.receivedText = text
                 self.log("收到文字: \(text.prefix(50))...")
+            } else {
+                self.log("无法解码收到的数据")
             }
         }
     }
     
     nonisolated func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
     
-    nonisolated func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
+    nonisolated func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
+        #if os(macOS)
+        Task { @MainActor in
+            self.log("📥 开始接收资源: \(resourceName)")
+            
+            // Show toast with receiving state
+            ImageTransferToastManager.shared.show(state: .receiving(count: 1))
+            
+            // Observe progress
+            let observation = progress.observe(\.fractionCompleted) { progress, _ in
+                Task { @MainActor in
+                    ImageTransferToastManager.shared.show(
+                        state: .receiving(count: 1, progress: progress.fractionCompleted)
+                    )
+                }
+            }
+            
+            // Store observation to prevent deallocation
+            objc_setAssociatedObject(progress, "progressObservation", observation, .OBJC_ASSOCIATION_RETAIN)
+        }
+        #endif
+    }
     
-    nonisolated func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
+    nonisolated func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {
+        #if os(macOS)
+        Task { @MainActor in
+            if let error = error {
+                self.log("❌ 资源接收失败: \(error.localizedDescription)")
+                ImageTransferToastManager.shared.show(state: .failed(message: "接收失败"))
+                return
+            }
+            
+            guard let localURL = localURL else {
+                self.log("❌ 资源接收失败: 无效的本地URL")
+                return
+            }
+            
+            self.log("✅ 资源接收完成: \(resourceName)")
+            
+            // Handle the received resource file
+            self.handleReceivedResourceFile(at: localURL, name: resourceName)
+        }
+        #endif
+    }
+    
+    #if os(macOS)
+    /// Handle received resource file and paste it
+    private func handleReceivedResourceFile(at url: URL, name: String) {
+        // Copy to persistent temp location (MC cleans up the original)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoiceBoardReceived", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        let destURL = tempDir.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: destURL) // Remove if exists
+        
+        do {
+            try FileManager.default.copyItem(at: url, to: destURL)
+            
+            // Write to pasteboard and paste
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.writeObjects([destURL as NSURL])
+            
+            ImageTransferToastManager.shared.show(state: .pasting)
+            
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) {
+                KeyboardSimulator.shared.paste()
+                
+                Task { @MainActor in
+                    ImageTransferToastManager.shared.show(state: .completed(count: 1))
+                }
+                
+                // Clean up after delay
+                DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                    try? FileManager.default.removeItem(at: destURL)
+                }
+            }
+        } catch {
+            self.log("❌ 复制接收文件失败: \(error)")
+            ImageTransferToastManager.shared.show(state: .failed(message: "处理失败"))
+        }
+    }
+    #endif
 }
 
 // MARK: - MCNearbyServiceAdvertiserDelegate

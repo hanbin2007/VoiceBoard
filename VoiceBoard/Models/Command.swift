@@ -45,6 +45,24 @@ enum VoiceBoardCommand: Codable {
     /// Sync click-before-input state from Mac to iOS (for display purposes)
     case clickBeforeInputState(Bool)
     
+    /// Notify Mac that images are about to be sent (sent before actual image data)
+    /// @deprecated Use willTransferResource for new resource-based transfers
+    case willPasteImages(count: Int)
+    
+    /// Paste multiple images (sent as Data)
+    /// @deprecated Use sendResource-based transfer for better memory efficiency
+    case pasteImages([Data])
+    
+    /// Notify Mac that a resource file transfer is starting (for sendResource-based transfer)
+    /// - Parameters:
+    ///   - fileName: Name of the resource file being transferred
+    ///   - index: Current image index (1-based)
+    ///   - total: Total number of images being transferred
+    case willTransferResource(fileName: String, index: Int, total: Int)
+    
+    /// Notify Mac that all resource transfers are complete
+    case resourceTransferComplete(count: Int)
+    
     // MARK: - Encoding
     
     func encode() -> Data? {

@@ -11,74 +11,93 @@ import SwiftUI
 /// Main iOS content view
 struct iOSContentView: View {
     @ObservedObject var viewModel: ConnectionViewModel
+    @ObservedObject private var transferManager = TransferManager.shared
     @Binding var showConnectionSheet: Bool
     @FocusState private var isTextEditorFocused: Bool
     @State private var showSettingsSheet: Bool = false
     @State private var showPhotoPickerSheet: Bool = false
+    @State private var showHistorySheet: Bool = false
     
     var body: some View {
-        NavigationStack {
-            GeometryReader { geometry in
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            // Connection Status (small text)
-                            connectionStatusText
-                            
-                            // Transcript Display
-                            transcriptView
-                                .frame(minHeight: isTextEditorFocused ? 120 : max(geometry.size.height * 0.35, 150))
-                            
-                            // Control Buttons Panel
-                            ControlButtonsPanel(
-                                viewModel: viewModel,
-                                transcript: $viewModel.transcript
-                            )
+        ZStack(alignment: .bottom) {
+            NavigationStack {
+                GeometryReader { geometry in
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            VStack(spacing: 12) {
+                                // Connection Status (small text)
+                                connectionStatusText
+                                
+                                // Transcript Display
+                                transcriptView
+                                    .frame(minHeight: isTextEditorFocused ? 120 : max(geometry.size.height * 0.35, 150))
+                                
+                                // Control Buttons Panel
+                                ControlButtonsPanel(
+                                    viewModel: viewModel,
+                                    transcript: $viewModel.transcript
+                                )
+                            }
+                            .padding()
                         }
-                        .padding()
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                }
-            }
-            .navigationTitle("VoiceBoard")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { showSettingsSheet = true }) {
-                        Image(systemName: "gearshape")
+                        .scrollDismissesKeyboard(.interactively)
                     }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        Button(action: { showPhotoPickerSheet = true }) {
-                            Image(systemName: "camera.fill")
+                .navigationTitle("VoiceBoard")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button(action: { showSettingsSheet = true }) {
+                            Image(systemName: "gearshape")
                         }
-                        Button(action: { showConnectionSheet = true }) {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        HStack(spacing: 16) {
+                            Button(action: { showHistorySheet = true }) {
+                                Image(systemName: "clock.arrow.circlepath")
+                            }
+                            Button(action: { showPhotoPickerSheet = true }) {
+                                Image(systemName: "camera.fill")
+                            }
+                            Button(action: { showConnectionSheet = true }) {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .keyboard) {
+                        HStack {
+                            Spacer()
+                            Button("完成") {
+                                isTextEditorFocused = false
+                            }
                         }
                     }
                 }
-                ToolbarItem(placement: .keyboard) {
-                    HStack {
-                        Spacer()
-                        Button("完成") {
-                            isTextEditorFocused = false
-                        }
-                    }
+                .sheet(isPresented: $showConnectionSheet) {
+                    ConnectionManagementView(viewModel: viewModel)
+                }
+                .sheet(isPresented: $showSettingsSheet) {
+                    iOSSettingsView()
+                }
+                .sheet(isPresented: $showPhotoPickerSheet) {
+                    PhotoPickerView(viewModel: PhotoPickerViewModel(connectionViewModel: viewModel))
+                }
+                .sheet(isPresented: $showHistorySheet) {
+                    MessageHistoryView(viewModel: viewModel)
+                }
+                .onAppear {
+                    // Apply idle timer setting from preferences
+                    iOSSettings.shared.updateIdleTimer()
                 }
             }
-            .sheet(isPresented: $showConnectionSheet) {
-                ConnectionManagementView(viewModel: viewModel)
-            }
-            .sheet(isPresented: $showSettingsSheet) {
-                iOSSettingsView()
-            }
-            .sheet(isPresented: $showPhotoPickerSheet) {
-                PhotoPickerView(viewModel: PhotoPickerViewModel(connectionViewModel: viewModel))
-            }
-            .onAppear {
-                // Apply idle timer setting from preferences
-                iOSSettings.shared.updateIdleTimer()
+            
+            // Floating transfer progress overlay
+            if transferManager.transferState.isInProgress {
+                TransferProgressFloatingView(state: transferManager.transferState)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.spring(duration: 0.3), value: transferManager.transferState.isInProgress)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
             }
         }
     }

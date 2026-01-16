@@ -2,39 +2,76 @@
 //  PhotoCaptureService.swift
 //  VoiceBoard
 //
-//  Service for capturing photos and copying to clipboard
+//  Service layer for photo capture and storage - manages camera permissions and photo collection
 //
 
 #if os(iOS)
 import UIKit
 import AVFoundation
 import Combine
-import SwiftUI
+
+// MARK: - Protocol Definition
+
+/// Protocol for photo capture operations - enables dependency injection and testing
+protocol PhotoCaptureServiceProtocol: AnyObject {
+    /// Array of captured photos
+    var capturedPhotos: [UIImage] { get }
+    var capturedPhotosPublisher: Published<[UIImage]>.Publisher { get }
+    
+    /// Camera permission status
+    var cameraPermissionStatus: AVAuthorizationStatus { get }
+    
+    /// Check current camera permission
+    func checkCameraPermission()
+    
+    /// Request camera permission
+    func requestCameraPermission() async -> Bool
+    
+    /// Add a photo to the collection
+    func addPhoto(_ image: UIImage)
+    
+    /// Remove a photo at specific index
+    func removePhoto(at index: Int)
+    
+    /// Clear all photos
+    func clearPhotos()
+    
+    /// Copy all photos to system clipboard
+    func copyPhotosToClipboard() -> Int
+}
+
+// MARK: - Implementation
 
 /// Service for managing photo capture and clipboard operations
 @MainActor
-class PhotoCaptureService: ObservableObject {
+final class PhotoCaptureService: ObservableObject, PhotoCaptureServiceProtocol {
+    
+    // MARK: - Singleton
     
     static let shared = PhotoCaptureService()
     
-    /// Array of captured photos
-    @Published var capturedPhotos: [UIImage] = []
+    // MARK: - Published Properties
     
-    /// Camera permission status
-    @Published var cameraPermissionStatus: AVAuthorizationStatus = .notDetermined
+    @Published private(set) var capturedPhotos: [UIImage] = []
     
-    private init() {
+    var capturedPhotosPublisher: Published<[UIImage]>.Publisher {
+        $capturedPhotos
+    }
+    
+    @Published private(set) var cameraPermissionStatus: AVAuthorizationStatus = .notDetermined
+    
+    // MARK: - Initialization
+    
+    init() {
         checkCameraPermission()
     }
     
     // MARK: - Permission Management
     
-    /// Check current camera permission status
     func checkCameraPermission() {
         cameraPermissionStatus = AVCaptureDevice.authorizationStatus(for: .video)
     }
     
-    /// Request camera permission
     func requestCameraPermission() async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         
@@ -42,13 +79,16 @@ class PhotoCaptureService: ObservableObject {
         case .authorized:
             cameraPermissionStatus = .authorized
             return true
+            
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .video)
             cameraPermissionStatus = granted ? .authorized : .denied
             return granted
+            
         case .denied, .restricted:
             cameraPermissionStatus = status
             return false
+            
         @unknown default:
             return false
         }
@@ -56,26 +96,21 @@ class PhotoCaptureService: ObservableObject {
     
     // MARK: - Photo Management
     
-    /// Add a captured photo
     func addPhoto(_ image: UIImage) {
         capturedPhotos.append(image)
     }
     
-    /// Remove a photo at specific index
     func removePhoto(at index: Int) {
         guard index >= 0 && index < capturedPhotos.count else { return }
         capturedPhotos.remove(at: index)
     }
     
-    /// Clear all captured photos
     func clearPhotos() {
         capturedPhotos.removeAll()
     }
     
     // MARK: - Clipboard Operations
     
-    /// Copy all captured photos to system clipboard
-    /// - Returns: Number of photos copied, 0 if failed
     func copyPhotosToClipboard() -> Int {
         guard !capturedPhotos.isEmpty else { return 0 }
         
@@ -83,16 +118,6 @@ class PhotoCaptureService: ObservableObject {
         pasteboard.images = capturedPhotos
         
         return capturedPhotos.count
-    }
-    
-    /// Copy a single photo to clipboard
-    func copyPhotoToClipboard(at index: Int) -> Bool {
-        guard index >= 0 && index < capturedPhotos.count else { return false }
-        
-        let pasteboard = UIPasteboard.general
-        pasteboard.image = capturedPhotos[index]
-        
-        return true
     }
 }
 #endif

@@ -3,6 +3,7 @@
 //  VoiceBoard
 //
 
+#if os(iOS)
 import SwiftUI
 import UIKit
 
@@ -43,3 +44,4 @@ struct ImagePickerView: UIViewControllerRepresentable {
         }
     }
 }
+#endif
