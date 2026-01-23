@@ -55,17 +55,23 @@ struct TransferProgressFloatingView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.blue, Color.blue.opacity(0.85)],
-                        startPoint: .leading,
-                        endPoint: .trailing
+        .background {
+            if #available(iOS 26.0, *) {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(.blue), in: .rect(cornerRadius: 16))
+            } else {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.blue, Color.blue.opacity(0.85)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-        )
+            }
+        }
+        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
     }
     
     // MARK: - Computed Properties

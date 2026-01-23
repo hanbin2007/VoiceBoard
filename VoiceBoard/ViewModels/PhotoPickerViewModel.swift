@@ -124,11 +124,12 @@ final class PhotoPickerViewModel: ObservableObject {
     }
     
     /// Copy photos to clipboard and send to Mac
-    func copyAndSend() {
-        guard !capturedPhotos.isEmpty else { return }
+    /// Returns true if transfer started successfully, false otherwise
+    func copyAndSend() async -> Bool {
+        guard !capturedPhotos.isEmpty else { return false }
         guard let connectionVM = connectionViewModel else {
             displayToast(message: "连接已断开")
-            return
+            return false
         }
         
         // Copy to local clipboard
@@ -143,12 +144,14 @@ final class PhotoPickerViewModel: ObservableObject {
             let photosToTransfer = capturedPhotos
             
             // Show immediate feedback
-            displayToast(message: "已复制 \(clipboardCount) 张照片，后台传输中...")
+            displayToast(message: "已复制 \(clipboardCount) 张照片，正在传输...")
             
-            // Delegate to global TransferManager - this survives when PhotoPickerView is dismissed
-            TransferManager.shared.startTransfer(photos: photosToTransfer, connectionVM: connectionVM)
+            // Delegate to global TransferManager - returns when transfer starts
+            let started = await TransferManager.shared.startTransfer(photos: photosToTransfer, connectionVM: connectionVM)
+            return started
         } else {
             displayToast(message: "已复制 \(clipboardCount) 张照片到剪贴板")
+            return false
         }
     }
     

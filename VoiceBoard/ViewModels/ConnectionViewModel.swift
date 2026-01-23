@@ -83,8 +83,22 @@ class ConnectionViewModel: NSObject, ObservableObject {
     private var reconnectTask: Task<Void, Never>?
     private let reconnectDelay: TimeInterval = 2.0
     private let lastConnectedPeerKey = "LastConnectedPeerName"
+    private var cancellables = Set<AnyCancellable>()
     #else
     private let deviceRole = "mac"
+    
+    /// Active batch receive session for accumulating files before paste
+    private var batchReceiveSession: BatchReceiveSession?
+    
+    /// Batch receive session structure
+    struct BatchReceiveSession {
+        let expectedFiles: [String]
+        var receivedFiles: [URL] = []
+        
+        var isComplete: Bool {
+            receivedFiles.count >= expectedFiles.count
+        }
+    }
     #endif
     
     // MARK: - Initialization
@@ -253,13 +267,37 @@ class ConnectionViewModel: NSObject, ObservableObject {
     
     #if os(iOS)
     private var transcriptCancellable: AnyCancellable?
+    private var pendingTextUpdate: String?  // Store pending text to send after transfer completes
     
     private func setupTranscriptObserver() {
         transcriptCancellable = $transcript
             .dropFirst()
             .sink { [weak self] newValue in
-                self?.sendCommand(.text(newValue))
+                guard let self = self else { return }
+                
+                // Skip sending text commands while transfer is in progress to avoid interference
+                if TransferManager.shared.transferState.isInProgress {
+                    // Store the pending text to send after transfer completes
+                    self.pendingTextUpdate = newValue
+                    return
+                }
+                
+                self.sendCommand(.text(newValue))
             }
+        
+        // Observe transfer state to send pending text when transfer completes
+        TransferManager.shared.$transferState
+            .dropFirst()
+            .sink { [weak self] state in
+                guard let self = self else { return }
+                
+                // When transfer completes, send any pending text update
+                if !state.isInProgress, let pendingText = self.pendingTextUpdate {
+                    self.pendingTextUpdate = nil
+                    self.sendCommand(.text(pendingText))
+                }
+            }
+            .store(in: &cancellables)
     }
     
     private func setupBackgroundHandling() {
@@ -325,6 +363,35 @@ class ConnectionViewModel: NSObject, ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         log("🛑 已取消自动重连")
+    }
+    
+    /// Reset all connections and clear recent connection records
+    func resetAllConnections() {
+        log("🔄 重置所有连接...")
+        
+        // Cancel auto-reconnect first
+        cancelAutoReconnect()
+        
+        // Stop all services
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        session?.disconnect()
+        
+        // Clear state
+        availablePeers.removeAll()
+        isConnected = false
+        connectedPeerName = ""
+        connectionState = .idle
+        
+        // Clear recent connection record
+        lastConnectedPeerName = nil
+        log("🗑️ 已清除最近连接记录")
+        
+        // Restart services
+        setupSession()
+        startServices()
+        
+        log("✅ 连接已重置")
     }
     
     // MARK: - Message History Management
@@ -534,6 +601,16 @@ class ConnectionViewModel: NSObject, ObservableObject {
                 Task { @MainActor in
                     self?.log(message)
                 }
+            },
+            startBatchSession: { [weak self] fileNames in
+                Task { @MainActor in
+                    self?.startBatchReceiveSession(expectedFiles: fileNames)
+                }
+            },
+            completeBatchSession: { [weak self] in
+                Task { @MainActor in
+                    self?.completeBatchReceiveSession()
+                }
             }
         )
         
@@ -582,6 +659,12 @@ extension ConnectionViewModel: MCSessionDelegate {
                 self.log("✅ 已连接: \(peerID.displayName)")
                 #if os(iOS)
                 self.saveLastConnectedPeer(peerID)
+                #endif
+                #if os(macOS)
+                // Sync click-before-input state to iOS when connected
+                let isEnabled = ClickPositionManager.shared.isEnabled
+                self.sendCommand(.clickBeforeInputState(isEnabled))
+                self.log("🔄 同步输入前点击状态: \(isEnabled ? "启用" : "禁用")")
                 #endif
             case .notConnected:
                 let disconnectedPeerName = peerID.displayName
@@ -681,7 +764,8 @@ extension ConnectionViewModel: MCSessionDelegate {
     }
     
     #if os(macOS)
-    /// Handle received resource file and paste it
+    /// Handle received resource file
+    /// Always paste each image immediately after receiving
     private func handleReceivedResourceFile(at url: URL, name: String) {
         // Copy to persistent temp location (MC cleans up the original)
         let tempDir = FileManager.default.temporaryDirectory
@@ -694,28 +778,118 @@ extension ConnectionViewModel: MCSessionDelegate {
         do {
             try FileManager.default.copyItem(at: url, to: destURL)
             
-            // Write to pasteboard and paste
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.writeObjects([destURL as NSURL])
+            // Track progress if we're in batch session
+            var currentIndex = 1
+            var totalCount = 1
             
-            ImageTransferToastManager.shared.show(state: .pasting)
-            
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) {
-                KeyboardSimulator.shared.paste()
+            if var session = batchReceiveSession {
+                // Update batch session tracking for progress display
+                session.receivedFiles.append(destURL)
+                batchReceiveSession = session
                 
-                Task { @MainActor in
-                    ImageTransferToastManager.shared.show(state: .completed(count: 1))
-                }
-                
-                // Clean up after delay
-                DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
-                    try? FileManager.default.removeItem(at: destURL)
-                }
+                currentIndex = session.receivedFiles.count
+                totalCount = session.expectedFiles.count
+                log("📦 接收并粘贴 \(currentIndex)/\(totalCount): \(name)")
+            } else {
+                log("📥 接收并粘贴: \(name)")
             }
+            
+            // Paste immediately - each image is pasted as it arrives
+            pasteFileImmediately(file: destURL, currentIndex: currentIndex, totalCount: totalCount)
+            
         } catch {
             self.log("❌ 复制接收文件失败: \(error)")
             ImageTransferToastManager.shared.show(state: .failed(message: "处理失败"))
+        }
+    }
+    
+    /// Start a new batch receive session
+    func startBatchReceiveSession(expectedFiles: [String]) {
+        log("📦 开始批量接收会话，预期 \(expectedFiles.count) 个文件")
+        batchReceiveSession = BatchReceiveSession(expectedFiles: expectedFiles)
+        
+        // Show initial receiving state
+        ImageTransferToastManager.shared.show(state: .receiving(count: expectedFiles.count))
+    }
+    
+    /// Complete the batch receive session and paste all files
+    func completeBatchReceiveSession() {
+        guard let session = batchReceiveSession else {
+            log("⚠️ 没有活动的批量接收会话")
+            return
+        }
+        
+        let receivedCount = session.receivedFiles.count
+        let expectedCount = session.expectedFiles.count
+        
+        log("📦 批量接收完成：收到 \(receivedCount)/\(expectedCount) 个文件")
+        
+        if !session.receivedFiles.isEmpty {
+            pasteFilesAndCleanup(files: session.receivedFiles, total: receivedCount)
+        } else {
+            ImageTransferToastManager.shared.show(state: .failed(message: "未收到任何文件"))
+        }
+        
+        // Clear session
+        batchReceiveSession = nil
+    }
+    
+    /// Paste a single file immediately with progress tracking
+    private func pasteFileImmediately(file: URL, currentIndex: Int, totalCount: Int) {
+        // Write file URL to pasteboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([file as NSURL])
+        
+        // Show progress (pasting current/total)
+        ImageTransferToastManager.shared.show(
+            state: .receiving(count: totalCount, progress: Double(currentIndex) / Double(totalCount))
+        )
+        
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) {
+            // Perform click at saved position if enabled (for first image only)
+            if currentIndex == 1 {
+                self.performClickIfEnabled()
+            }
+            
+            KeyboardSimulator.shared.paste()
+            
+            // If this is the last image, show completed toast
+            if currentIndex == totalCount {
+                Task { @MainActor in
+                    ImageTransferToastManager.shared.show(state: .completed(count: totalCount))
+                }
+            }
+            
+            // Clean up after delay
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+    }
+    
+    /// Paste files to clipboard and trigger paste command
+    private func pasteFilesAndCleanup(files: [URL], total: Int) {
+        // Write all file URLs to pasteboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects(files as [NSURL])
+        
+        ImageTransferToastManager.shared.show(state: .pasting)
+        
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) {
+            KeyboardSimulator.shared.paste()
+            
+            Task { @MainActor in
+                ImageTransferToastManager.shared.show(state: .completed(count: total))
+            }
+            
+            // Clean up after delay
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                for file in files {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
         }
     }
     #endif
@@ -765,7 +939,13 @@ extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
             
             self.log("🔍 发现设备: \(peerID.displayName) (角色: \(role))")
             
-            if !self.availablePeers.contains(peerID) {
+            // Deduplicate by displayName to handle MCPeerID recreation
+            // (MCPeerID equality is based on object identity, not displayName)
+            if let existingIndex = self.availablePeers.firstIndex(where: { $0.displayName == peerID.displayName }) {
+                // Replace with the latest peerID to ensure connection uses valid instance
+                self.availablePeers[existingIndex] = peerID
+                self.log("🔄 更新设备: \(peerID.displayName)")
+            } else {
                 self.availablePeers.append(peerID)
             }
             
@@ -785,7 +965,8 @@ extension ConnectionViewModel: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         Task { @MainActor in
             self.log("设备离线: \(peerID.displayName)")
-            self.availablePeers.removeAll { $0 == peerID }
+            // Remove by displayName to handle different MCPeerID instances for same device
+            self.availablePeers.removeAll { $0.displayName == peerID.displayName }
         }
     }
     

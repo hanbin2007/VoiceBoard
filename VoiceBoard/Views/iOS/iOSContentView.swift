@@ -120,6 +120,9 @@ struct iOSContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .compatGlassCapsule(tint: viewModel.isConnected ? .green.opacity(0.1) : .orange.opacity(0.1))
     }
     
     private var transcriptView: some View {
@@ -146,8 +149,11 @@ struct iOSContentView: View {
                 .scrollContentBackground(.hidden)
                 .padding(8)
                 .focused($isTextEditorFocused)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .compatGlassEffect(
+                    tint: .gray.opacity(0.1),
+                    cornerRadius: 12,
+                    fallbackColor: Color(.systemGray6)
+                )
                 .overlay(
                     Group {
                         if viewModel.transcript.isEmpty {

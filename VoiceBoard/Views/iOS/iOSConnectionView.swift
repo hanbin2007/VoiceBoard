@@ -14,6 +14,7 @@ struct ConnectionManagementView: View {
     @ObservedObject var viewModel: ConnectionViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showLogs = false
+    @State private var showResetConfirmation = false
     
     var body: some View {
         NavigationStack {
@@ -80,6 +81,16 @@ struct ConnectionManagementView: View {
                         Label("查看日志", systemImage: "doc.text")
                     }
                 }
+                
+                Section {
+                    Button(role: .destructive, action: {
+                        showResetConfirmation = true
+                    }) {
+                        Label("重置所有连接", systemImage: "trash")
+                    }
+                } footer: {
+                    Text("断开当前连接并清除最近连接的设备记录")
+                }
             }
             .navigationTitle("连接管理")
             .navigationBarTitleDisplayMode(.inline)
@@ -92,6 +103,14 @@ struct ConnectionManagementView: View {
             }
             .sheet(isPresented: $showLogs) {
                 LogsView(viewModel: viewModel)
+            }
+            .alert("重置所有连接", isPresented: $showResetConfirmation) {
+                Button("取消", role: .cancel) { }
+                Button("重置", role: .destructive) {
+                    viewModel.resetAllConnections()
+                }
+            } message: {
+                Text("将断开当前连接并清除最近连接的设备记录。下次需要手动选择设备连接。")
             }
         }
     }

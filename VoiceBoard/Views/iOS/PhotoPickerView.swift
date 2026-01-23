@@ -16,6 +16,9 @@ struct PhotoPickerView: View {
     @ObservedObject private var transferManager = TransferManager.shared
     @Environment(\.dismiss) private var dismiss
     
+    /// Whether we are waiting for transfer to start
+    @State private var isSending = false
+    
     // Grid layout
     private let columns = [
         GridItem(.flexible()),
@@ -136,57 +139,44 @@ struct PhotoPickerView: View {
     private var actionButtonsView: some View {
         VStack(spacing: 12) {
             // Take Photo Button
-            Button(action: {
+            GlassActionButton(
+                title: "拍照",
+                icon: "camera.fill",
+                color: .blue
+            ) {
                 viewModel.checkCameraPermission()
-            }) {
-                HStack {
-                    Image(systemName: "camera.fill")
-                    Text("拍照")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(Color.blue)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             
             // Copy and Send Button
             if !viewModel.capturedPhotos.isEmpty {
-                Button(action: {
-                    viewModel.copyAndSend()
-                }) {
-                    HStack {
-                        Image(systemName: "doc.on.clipboard.fill")
-                        Text("复制并发送")
-                            .fontWeight(.semibold)
+                GlassActionButton(
+                    title: isSending ? "正在准备..." : "复制并发送",
+                    icon: "doc.on.clipboard.fill",
+                    color: .green,
+                    isLoading: isSending,
+                    disabled: isSending || transferManager.transferState.isInProgress
+                ) {
+                    isSending = true
+                    Task {
+                        let started = await viewModel.copyAndSend()
+                        isSending = false
+                        if started {
+                            dismiss()
+                        }
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Color.green)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .disabled(transferManager.transferState.isInProgress)
             }
             
             // Clear All Button
             if !viewModel.capturedPhotos.isEmpty {
-                Button(action: {
+                GlassActionButton(
+                    title: "清空全部",
+                    icon: "trash",
+                    color: .orange
+                ) {
                     withAnimation(.easeOut(duration: 0.2)) {
                         viewModel.clearPhotos()
                     }
-                }) {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("清空全部")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Color.orange.opacity(0.15))
-                    .foregroundStyle(.orange)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
         }
@@ -203,8 +193,7 @@ struct PhotoPickerView: View {
                         Text(viewModel.toastState.message)
                     }
                     .padding()
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(20)
+                    .compatGlassCapsule(tint: .green.opacity(0.2))
                     .shadow(radius: 5)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .padding(.bottom, 100)

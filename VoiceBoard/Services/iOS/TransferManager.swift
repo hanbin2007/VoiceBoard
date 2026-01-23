@@ -28,6 +28,9 @@ final class TransferManager: ObservableObject {
     /// Toast message to display
     @Published private(set) var toastMessage: String?
     
+    /// Whether a transfer has started (first file sending) - used for view dismiss control
+    @Published private(set) var hasTransferStarted: Bool = false
+    
     // MARK: - Dependencies
     
     private let transferService: PhotoTransferServiceProtocol
@@ -49,136 +52,122 @@ final class TransferManager: ObservableObject {
     
     // MARK: - Public API
     
-    /// Start transferring photos to Mac
-    /// This runs in a detached task that survives view lifecycle changes
+    /// Start transferring photos to Mac (async version)
+    /// Returns after the first file starts transferring successfully
     /// - Parameters:
     ///   - photos: The photos to transfer
     ///   - connectionVM: The connection view model (captured strongly for the duration of transfer)
-    func startTransfer(photos: [UIImage], connectionVM: ConnectionViewModel) {
-        guard !photos.isEmpty else { return }
+    /// - Returns: true if transfer started successfully, false otherwise
+    func startTransfer(photos: [UIImage], connectionVM: ConnectionViewModel) async -> Bool {
+        guard !photos.isEmpty else { return false }
         guard connectionVM.isConnected else {
             showToast("连接已断开")
-            return
+            return false
         }
         
-        showToast("后台传输 \(photos.count) 张照片...")
+        // Reset state
+        hasTransferStarted = false
+        
+        // Prepare images as temp files for sendResource
+        let fileURLs = await transferService.prepareImagesAsFiles(photos, quality: 0.7)
+        
+        guard !fileURLs.isEmpty else {
+            showToast("照片压缩失败")
+            return false
+        }
+        
+        // Generate resource names
+        let total = fileURLs.count
+        let resourceNames = fileURLs.enumerated().map { index, url in
+            "batch_\(index + 1)_of_\(total)_\(url.lastPathComponent)"
+        }
+        
+        // Send willTransferBatch command to notify macOS to create batch session
+        await connectionVM.sendCommand(.willTransferBatch(fileNames: resourceNames))
+        
+        showToast("传输 \(total) 张照片...")
         
         // Capture strong references for the detached task
         let service = self.transferService
         
-        // Run in completely detached task that won't be cancelled when views are dismissed
+        // Start the first file transfer and wait for it to begin
+        guard let firstFileURL = fileURLs.first else { return false }
+        let firstName = resourceNames[0]
+        
+        // Notify Mac about first file
+        await connectionVM.sendCommand(.batchFileTransferring(fileName: firstName, index: 1, total: total))
+        
+        // Start sending first file
+        guard let firstProgress = await connectionVM.sendImageResource(at: firstFileURL, resourceName: firstName) else {
+            showToast("传输启动失败")
+            return false
+        }
+        
+        // Mark transfer as started
+        hasTransferStarted = true
+        
+        // Update initial progress
+        await service.updateTransferProgress(current: 1, total: total, progress: 0)
+        
+        // Continue the rest of the transfer in background
         Task.detached(priority: .userInitiated) {
-            await self.performTransfer(
-                photos: photos,
+            await self.continueTransfer(
+                fileURLs: fileURLs,
+                resourceNames: resourceNames,
+                firstProgress: firstProgress,
                 connectionVM: connectionVM,
                 service: service
             )
         }
+        
+        return true
     }
     
     // MARK: - Private Methods
     
-    /// Perform the actual transfer - runs in background
-    private func performTransfer(
-        photos: [UIImage],
+    /// Continue the batch transfer after first file has started
+    private func continueTransfer(
+        fileURLs: [URL],
+        resourceNames: [String],
+        firstProgress: Progress,
         connectionVM: ConnectionViewModel,
         service: PhotoTransferServiceProtocol
     ) async {
-        // Prepare images as temp files for sendResource
-        let fileURLs = await service.prepareImagesAsFiles(photos, quality: 0.7)
-        
-        guard !fileURLs.isEmpty else {
-            await MainActor.run { self.showToast("照片压缩失败") }
-            return
-        }
-        
         let total = fileURLs.count
         var successCount = 0
         
-        // Send each file using sendResource
-        for (index, fileURL) in fileURLs.enumerated() {
-            let fileName = fileURL.lastPathComponent
-            let resourceName = "image_\(index + 1)_of_\(total)_\(fileName)"
+        // Wait for first file to complete
+        let firstSuccess = await waitForProgress(firstProgress, index: 1, total: total, service: service)
+        if firstSuccess { successCount += 1 }
+        
+        // Send remaining files (starting from index 1)
+        for i in 1..<fileURLs.count {
+            let fileURL = fileURLs[i]
+            let resourceName = resourceNames[i]
             
-            // Notify Mac that a resource is coming
-            await connectionVM.sendCommand(.willTransferResource(fileName: resourceName, index: index + 1, total: total))
+            // Notify Mac about this file
+            await connectionVM.sendCommand(.batchFileTransferring(fileName: resourceName, index: i + 1, total: total))
             
             // Send the resource file
             if let progress = await connectionVM.sendImageResource(at: fileURL, resourceName: resourceName) {
                 // Update initial progress
-                await service.updateTransferProgress(current: index + 1, total: total, progress: 0)
+                await service.updateTransferProgress(current: i + 1, total: total, progress: 0)
                 
-                // Wait for transfer to complete using fractionCompleted
-                // Also observe isCancelled to detect when transfer is cancelled
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    var hasResumed = false
-                    var fractionObservation: NSKeyValueObservation?
-                    var cancelledObservation: NSKeyValueObservation?
-                    
-                    // Helper to clean up and resume
-                    let cleanup = {
-                        guard !hasResumed else { return }
-                        hasResumed = true
-                        fractionObservation?.invalidate()
-                        cancelledObservation?.invalidate()
-                        continuation.resume()
-                    }
-                    
-                    // Observe fractionCompleted for progress updates
-                    fractionObservation = progress.observe(\.fractionCompleted, options: [.new]) { [weak service] prog, _ in
-                        // Update progress UI
-                        Task { @MainActor in
-                            service?.updateTransferProgress(
-                                current: index + 1,
-                                total: total,
-                                progress: prog.fractionCompleted
-                            )
-                        }
-                        
-                        // Check if transfer completed (fractionCompleted >= 1.0)
-                        if prog.fractionCompleted >= 1.0 {
-                            cleanup()
-                        }
-                    }
-                    
-                    // Observe isCancelled to detect when transfer is cancelled
-                    cancelledObservation = progress.observe(\.isCancelled, options: [.new]) { prog, _ in
-                        if prog.isCancelled {
-                            cleanup()
-                        }
-                    }
-                    
-                    // Store to prevent deallocation
-                    objc_setAssociatedObject(progress, "kvoFraction", fractionObservation, .OBJC_ASSOCIATION_RETAIN)
-                    objc_setAssociatedObject(progress, "kvoCancelled", cancelledObservation, .OBJC_ASSOCIATION_RETAIN)
-                    
-                    // Check immediately in case already cancelled or completed
-                    if progress.isCancelled || progress.fractionCompleted >= 1.0 {
-                        cleanup()
-                    }
-                    
-                    // Safety timeout: resume after 60 seconds even if not complete
-                    Task {
-                        try? await Task.sleep(nanoseconds: 60_000_000_000)
-                        cleanup()
-                    }
-                }
-                
-                // Only count as success if transfer actually completed (not cancelled)
-                if progress.fractionCompleted >= 1.0 && !progress.isCancelled {
-                    successCount += 1
-                }
+                // Wait for completion
+                let success = await waitForProgress(progress, index: i + 1, total: total, service: service)
+                if success { successCount += 1 }
             }
         }
         
-        // Notify Mac that transfer is complete
+        // Notify Mac that batch transfer is complete
+        await connectionVM.sendCommand(.batchTransferComplete)
+        
+        // Update final state
         if successCount > 0 {
-            await connectionVM.sendCommand(.resourceTransferComplete(count: successCount))
-            
-            // Update state to completed
             await MainActor.run {
                 self.transferState = .completed(count: successCount)
                 self.showToast("已发送 \(successCount) 张照片")
+                self.hasTransferStarted = false
             }
             
             // Reset to idle after delay
@@ -192,6 +181,7 @@ final class TransferManager: ObservableObject {
             await MainActor.run {
                 self.transferState = .idle
                 self.showToast("传输失败")
+                self.hasTransferStarted = false
             }
         }
         
@@ -204,7 +194,77 @@ final class TransferManager: ObservableObject {
         }
     }
     
-    /// Show toast message with auto-dismiss (MainActor - synchronous)
+    /// Wait for a Progress object to complete
+    /// Returns true if completed successfully, false if cancelled or timed out
+    private func waitForProgress(_ progress: Progress, index: Int, total: Int, service: PhotoTransferServiceProtocol) async -> Bool {
+        // Use a class to hold observations - ensures they stay alive
+        class ObservationHolder {
+            var observations: [NSKeyValueObservation] = []
+            func invalidateAll() {
+                for obs in observations {
+                    obs.invalidate()
+                }
+                observations.removeAll()
+            }
+        }
+        
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            var hasResumed = false
+            let holder = ObservationHolder()
+            
+            // Helper to clean up and resume
+            let cleanup = { (success: Bool) in
+                guard !hasResumed else { return }
+                hasResumed = true
+                holder.invalidateAll()
+                continuation.resume(returning: success)
+            }
+            
+            // Observe fractionCompleted for progress updates
+            let fractionObservation = progress.observe(\.fractionCompleted, options: [.new]) { [weak service] prog, _ in
+                // Update progress UI
+                Task { @MainActor in
+                    service?.updateTransferProgress(
+                        current: index,
+                        total: total,
+                        progress: prog.fractionCompleted
+                    )
+                }
+                
+                // Check if transfer completed
+                if prog.fractionCompleted >= 1.0 {
+                    cleanup(true)
+                }
+            }
+            holder.observations.append(fractionObservation)
+            
+            // Observe isCancelled
+            let cancelledObservation = progress.observe(\.isCancelled, options: [.new]) { prog, _ in
+                if prog.isCancelled {
+                    cleanup(false)
+                }
+            }
+            holder.observations.append(cancelledObservation)
+            
+            // Check immediately in case already completed or cancelled
+            if progress.fractionCompleted >= 1.0 {
+                cleanup(true)
+                return
+            } else if progress.isCancelled {
+                cleanup(false)
+                return
+            }
+            
+            // Safety timeout: resume after 60 seconds
+            Task { [holder] in
+                _ = holder // Keep holder alive
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                cleanup(false)
+            }
+        }
+    }
+    
+    /// Show toast message with auto-dismiss
     private func showToast(_ message: String) {
         self.toastMessage = message
         
@@ -221,7 +281,9 @@ final class TransferManager: ObservableObject {
     func resetState() {
         transferService.resetState()
         toastMessage = nil
+        hasTransferStarted = false
     }
 }
 #endif
+
 

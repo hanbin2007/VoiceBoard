@@ -9,34 +9,7 @@
 import SwiftUI
 
 // MARK: - Command Button Component
-
-/// A styled button for sending commands
-struct CommandButton: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let disabled: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 20))
-                    .frame(height: 24)
-                Text(title)
-                    .font(.caption2)
-                    .frame(height: 14)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background(disabled ? Color(.systemGray5) : color.opacity(0.15))
-            .foregroundStyle(disabled ? .secondary : color)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .disabled(disabled)
-    }
-}
+// Note: Using GlassButton from GlassEffectCompat.swift for iOS 26 Liquid Glass support
 
 // MARK: - Control Buttons Panel
 
@@ -65,15 +38,18 @@ struct ControlButtonsPanel: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .compatGlassEffect(
+                tint: .blue.opacity(0.1),
+                cornerRadius: 10,
+                fallbackColor: Color(.systemGray6)
+            )
             .disabled(!viewModel.isConnected)
             .opacity(viewModel.isConnected ? 1.0 : 0.5)
             
             // Primary Actions Row
             HStack(spacing: 12) {
                 // Insert Text Button
-                CommandButton(
+                GlassButton(
                     title: "插入",
                     icon: "text.cursor",
                     color: .blue,
@@ -83,7 +59,7 @@ struct ControlButtonsPanel: View {
                 }
                 
                 // Insert + Enter Button
-                CommandButton(
+                GlassButton(
                     title: "发送",
                     icon: "paperplane.fill",
                     color: .green,
@@ -98,7 +74,7 @@ struct ControlButtonsPanel: View {
             // Secondary Actions Row
             HStack(spacing: 12) {
                 // Clear Input Field
-                CommandButton(
+                GlassButton(
                     title: "清空",
                     icon: "trash",
                     color: .orange,
@@ -108,7 +84,7 @@ struct ControlButtonsPanel: View {
                 }
                 
                 // Enter Key
-                CommandButton(
+                GlassButton(
                     title: "回车",
                     icon: "return",
                     color: .purple,
@@ -118,7 +94,7 @@ struct ControlButtonsPanel: View {
                 }
                 
                 // Paste
-                CommandButton(
+                GlassButton(
                     title: "粘贴",
                     icon: "doc.on.clipboard",
                     color: .teal,
@@ -128,7 +104,7 @@ struct ControlButtonsPanel: View {
                 }
                 
                 // Delete
-                CommandButton(
+                GlassButton(
                     title: "删除",
                     icon: "delete.left",
                     color: .red,

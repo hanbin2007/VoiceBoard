@@ -58,10 +58,28 @@ enum VoiceBoardCommand: Codable {
     ///   - fileName: Name of the resource file being transferred
     ///   - index: Current image index (1-based)
     ///   - total: Total number of images being transferred
+    /// @deprecated Use willTransferBatch for batch transfers
     case willTransferResource(fileName: String, index: Int, total: Int)
     
     /// Notify Mac that all resource transfers are complete
     case resourceTransferComplete(count: Int)
+    
+    // MARK: - Batch Transfer Commands
+    
+    /// Notify Mac that a batch transfer is starting with file names list
+    /// macOS should create a batch receive session and wait for all files
+    /// - Parameter fileNames: List of resource names that will be sent
+    case willTransferBatch(fileNames: [String])
+    
+    /// Notify Mac that a specific file in batch is being transferred
+    /// - Parameters:
+    ///   - fileName: Name of the resource file being transferred
+    ///   - index: Current file index (1-based)
+    ///   - total: Total number of files in batch
+    case batchFileTransferring(fileName: String, index: Int, total: Int)
+    
+    /// Notify Mac that all batch files have been sent
+    case batchTransferComplete
     
     // MARK: - Encoding
     

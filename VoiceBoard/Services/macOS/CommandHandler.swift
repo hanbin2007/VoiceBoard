@@ -22,6 +22,10 @@ struct CommandContext {
     let performClickIfEnabled: () -> Void
     let sendResponse: (VoiceBoardCommand) -> Void
     let log: (String) -> Void
+    
+    // Batch transfer callbacks
+    let startBatchSession: (([String]) -> Void)?
+    let completeBatchSession: (() -> Void)?
 }
 
 // MARK: - Command Handler Implementation
@@ -89,6 +93,17 @@ final class CommandHandler: CommandHandlerProtocol {
             
         case .resourceTransferComplete(let count):
             handleResourceTransferComplete(count: count, context: context)
+            
+        // MARK: Batch Transfer Commands
+            
+        case .willTransferBatch(let fileNames):
+            handleWillTransferBatch(fileNames: fileNames, context: context)
+            
+        case .batchFileTransferring(let fileName, let index, let total):
+            handleBatchFileTransferring(fileName: fileName, index: index, total: total, context: context)
+            
+        case .batchTransferComplete:
+            handleBatchTransferComplete(context: context)
         }
     }
     
@@ -308,6 +323,26 @@ final class CommandHandler: CommandHandlerProtocol {
         // All resources have been sent
         // Note: The actual paste happens in ConnectionViewModel.didFinishReceivingResourceWithName
         context.log("资源传输完成，共 \(count) 个文件")
+    }
+    
+    // MARK: - Batch Transfer Handlers
+    
+    private func handleWillTransferBatch(fileNames: [String], context: CommandContext) {
+        // Start a new batch receive session
+        context.startBatchSession?(fileNames)
+        context.log("📦 开始批量传输会话，共 \(fileNames.count) 个文件")
+    }
+    
+    private func handleBatchFileTransferring(fileName: String, index: Int, total: Int, context: CommandContext) {
+        // Individual file in batch is being transferred
+        // Progress will be handled by the sendResource delegate
+        context.log("📥 接收文件 \(index)/\(total): \(fileName)")
+    }
+    
+    private func handleBatchTransferComplete(context: CommandContext) {
+        // Complete the batch session and paste all files
+        context.completeBatchSession?()
+        context.log("📦 批量传输完成")
     }
 }
 #endif
