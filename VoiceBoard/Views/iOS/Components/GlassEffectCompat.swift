@@ -73,9 +73,9 @@ struct GlassButton: View {
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
-                .foregroundStyle(disabled ? .secondary : color)
+                .foregroundStyle(disabled ? .secondary : .primary)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glassProminent)
             .tint(disabled ? .gray : color)
             .disabled(disabled)
         } else {
@@ -144,7 +144,7 @@ struct GlassActionButton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glassProminent)
             .tint(disabled ? .gray : color)
             .disabled(disabled)
         } else {
